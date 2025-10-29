@@ -25,6 +25,7 @@ import {
   SavedConnectionsLoadedTelemetryEvent,
 } from '../../../telemetry';
 import type { SegmentProperties } from '../../../telemetry/telemetryService';
+import { suiteIfCI } from '../helpers';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { version } = require('../../../../package.json');
@@ -35,7 +36,7 @@ chai.use(sinonChai);
 
 config({ path: resolve(__dirname, '../../../../.env') });
 
-suite('Telemetry Controller Test Suite', () => {
+suiteIfCI('Telemetry Controller Test Suite', () => {
   const testTelemetryService =
     mdbTestExtension.testExtensionController._telemetryService;
 
