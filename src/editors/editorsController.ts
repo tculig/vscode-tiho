@@ -36,6 +36,10 @@ import type { QueryWithCopilotCodeLensProvider } from './queryWithCopilotCodeLen
 
 const log = createLogger('editors controller');
 
+let sharedMemoryFileSystemProvider: MemoryFileSystemProvider | undefined;
+let hasRegisteredViewDocumentFileSystemProvider = false;
+
+
 export function getFileDisplayNameForDocument(
   documentId: any,
   namespace: string,
@@ -137,7 +141,12 @@ export default class EditorsController {
     this._context = context;
     this._statusView = statusView;
     this._telemetryService = telemetryService;
-    this._memoryFileSystemProvider = new MemoryFileSystemProvider();
+
+    if (!sharedMemoryFileSystemProvider) {
+      sharedMemoryFileSystemProvider = new MemoryFileSystemProvider();
+    }
+
+    this._memoryFileSystemProvider = sharedMemoryFileSystemProvider;
     this._documentIdStore = new DocumentIdStore();
     this._mongoDBDocumentService = new MongoDBDocumentService({
       context: this._context,
@@ -381,15 +390,37 @@ export default class EditorsController {
   }
 
   registerProviders(): void {
-    this._context.subscriptions.push(
-      vscode.workspace.registerFileSystemProvider(
-        VIEW_DOCUMENT_SCHEME,
-        this._memoryFileSystemProvider,
-        {
-          isCaseSensitive: true,
-        },
-      ),
-    );
+    // Register the in-memory file system provider only once per extension host.
+    if (!hasRegisteredViewDocumentFileSystemProvider) {
+      try {
+        this._context.subscriptions.push(
+          vscode.workspace.registerFileSystemProvider(
+            VIEW_DOCUMENT_SCHEME,
+            this._memoryFileSystemProvider,
+            {
+              isCaseSensitive: true,
+            },
+          ),
+        );
+        hasRegisteredViewDocumentFileSystemProvider = true;
+      } catch (error) {
+        // If the provider is already registered, we can safely ignore this error.
+        // This typically happens in test environments or if VS Code activates the
+        // extension multiple times in the same extension host.
+        if (
+          error instanceof Error &&
+          error.message.includes('already registered')
+        ) {
+          console.warn(
+            `File system provider for ${VIEW_DOCUMENT_SCHEME} is already registered. Skipping registration.`,
+          );
+          hasRegisteredViewDocumentFileSystemProvider = true;
+        } else {
+          // Re-throw if it's a different error.
+          throw error;
+        }
+      }
+    }
     // REGISTER CONTENT PROVIDERS.
     this._context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(

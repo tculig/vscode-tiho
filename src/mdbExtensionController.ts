@@ -59,6 +59,10 @@ import {
 import * as queryString from 'query-string';
 import { MCPController } from './mcp/mcpController';
 
+
+const registeredExtensionCommands = new Set<ExtensionCommand>();
+let hasRegisteredUriHandler = false;
+
 // This class is the top-level controller for our extension.
 // Commands which the extensions handles are defined in the function `activate`.
 export default class MDBExtensionController implements vscode.Disposable {
@@ -223,9 +227,34 @@ export default class MDBExtensionController implements vscode.Disposable {
   }
 
   registerUriHandler = (): void => {
-    vscode.window.registerUriHandler({
+    if (hasRegisteredUriHandler) {
+      console.warn(
+        'URI handler is already registered. Skipping duplicate registration.',
+      );
+      return;
+    }
+
+    const handler: vscode.UriHandler = {
       handleUri: this._handleDeepLink,
-    });
+    };
+
+    try {
+      const disposable = vscode.window.registerUriHandler(handler);
+      this._context.subscriptions.push(disposable);
+      hasRegisteredUriHandler = true;
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes('already registered')
+      ) {
+        console.warn(
+          'URI handler is already registered in VS Code. Skipping duplicate registration.',
+        );
+        hasRegisteredUriHandler = true;
+      } else {
+        throw error;
+      }
+    }
   };
 
   _handleDeepLink = async (uri: vscode.Uri): Promise<void> => {
@@ -471,17 +500,42 @@ export default class MDBExtensionController implements vscode.Disposable {
     command: ExtensionCommand,
     commandHandler: (...args: any[]) => Promise<boolean>,
   ): void => {
+    if (registeredExtensionCommands.has(command)) {
+      console.warn(
+        `Command '${command}' is already registered. Skipping duplicate registration.`,
+      );
+      return;
+    }
+
     const commandHandlerWithTelemetry = (args: any[]): Promise<boolean> => {
       this._telemetryService.track(new CommandRunTelemetryEvent(command));
 
       return commandHandler(args);
     };
+
     const participant = this._participantController.getParticipant();
-    if (participant) {
+    if (!participant) {
+      return;
+    }
+
+    try {
       this._context.subscriptions.push(
         participant,
         vscode.commands.registerCommand(command, commandHandlerWithTelemetry),
       );
+      registeredExtensionCommands.add(command);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes('already exists')
+      ) {
+        console.warn(
+          `Command '${command}' is already registered in VS Code. Skipping duplicate registration.`,
+        );
+        registeredExtensionCommands.add(command);
+      } else {
+        throw error;
+      }
     }
   };
 
@@ -489,15 +543,37 @@ export default class MDBExtensionController implements vscode.Disposable {
     command: ExtensionCommand,
     commandHandler: (...args: any[]) => Promise<boolean>,
   ): void => {
+    if (registeredExtensionCommands.has(command)) {
+      console.warn(
+        `Command '${command}' is already registered. Skipping duplicate registration.`,
+      );
+      return;
+    }
+
     const commandHandlerWithTelemetry = (args: any[]): Promise<boolean> => {
       this._telemetryService.track(new CommandRunTelemetryEvent(command));
 
       return commandHandler(args);
     };
 
-    this._context.subscriptions.push(
-      vscode.commands.registerCommand(command, commandHandlerWithTelemetry),
-    );
+    try {
+      this._context.subscriptions.push(
+        vscode.commands.registerCommand(command, commandHandlerWithTelemetry),
+      );
+      registeredExtensionCommands.add(command);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes('already exists')
+      ) {
+        console.warn(
+          `Command '${command}' is already registered in VS Code. Skipping duplicate registration.`,
+        );
+        registeredExtensionCommands.add(command);
+      } else {
+        throw error;
+      }
+    }
   };
 
   registerEditorCommands(): void {

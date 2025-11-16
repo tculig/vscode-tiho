@@ -73,6 +73,9 @@ import { DocumentSource } from '../documentSource';
 
 const log = createLogger('participant');
 
+let sharedChatParticipant: vscode.ChatParticipant | undefined;
+
+
 const NUM_DOCUMENTS_TO_SAMPLE = 3;
 
 const MONGODB_DOCS_LINK = 'https://www.mongodb.com/docs/';
@@ -120,21 +123,52 @@ export default class ParticipantController {
     // Chat participants appear as top-level options in the chat input
     // when you type `@`, and can contribute sub-commands in the chat input
     // that appear when you type `/`.
-    this._participant = vscode.chat.createChatParticipant(
-      CHAT_PARTICIPANT_ID,
-      this.chatHandler.bind(this),
-    );
-    this._participant.iconPath = vscode.Uri.joinPath(
-      vscode.Uri.parse(context.extensionPath),
-      'images',
-      'mongodb.png',
-    );
-    log.info('Chat participant created', {
-      participantId: this._participant?.id,
-    });
-    this._participant.onDidReceiveFeedback(this.handleUserFeedback.bind(this));
 
-    return this._participant;
+    if (this._participant) {
+      return this._participant;
+    }
+
+    if (sharedChatParticipant) {
+      this._participant = sharedChatParticipant;
+
+      return this._participant;
+    }
+
+    try {
+      const participant = vscode.chat.createChatParticipant(
+        CHAT_PARTICIPANT_ID,
+        this.chatHandler.bind(this),
+      );
+      participant.iconPath = vscode.Uri.joinPath(
+        vscode.Uri.parse(context.extensionPath),
+        'images',
+        'mongodb.png',
+      );
+      log.info('Chat participant created', {
+        participantId: participant.id,
+      });
+      participant.onDidReceiveFeedback(
+        this.handleUserFeedback.bind(this),
+      );
+
+      sharedChatParticipant = participant;
+      this._participant = participant;
+
+      return this._participant;
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes('already has implementation')
+      ) {
+        log.warn(
+          `Chat participant ${CHAT_PARTICIPANT_ID} is already registered. Skipping registration.`,
+        );
+
+        return this._participant as vscode.ChatParticipant;
+      }
+
+      throw error;
+    }
   }
 
   getParticipant(): vscode.ChatParticipant | undefined {
