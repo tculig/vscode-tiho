@@ -159,11 +159,18 @@ export default class PlaygroundController {
     }
 
     // The connectionId is null when disconnecting.
-    await this._languageServerController.activeConnectionChanged({
-      connectionId,
-      connectionString: mongoClientOption?.url,
-      connectionOptions: mongoClientOption?.options,
-    });
+    try {
+      await this._languageServerController.activeConnectionChanged({
+        connectionId,
+        connectionString: mongoClientOption?.url,
+        connectionOptions: mongoClientOption?.options,
+      });
+    } catch (error) {
+      log.warn(
+        'Failed to notify language server about active connection change',
+        error,
+      );
+    }
   }
 
   async _createPlaygroundFileWithContent(

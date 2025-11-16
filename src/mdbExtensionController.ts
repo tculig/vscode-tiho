@@ -61,6 +61,7 @@ import { MCPController } from './mcp/mcpController';
 
 
 const registeredExtensionCommands = new Set<ExtensionCommand>();
+const commandHandlerRegistry = new Map<ExtensionCommand, (...args: any[]) => Promise<boolean>>();
 let hasRegisteredUriHandler = false;
 
 // This class is the top-level controller for our extension.
@@ -500,28 +501,47 @@ export default class MDBExtensionController implements vscode.Disposable {
     command: ExtensionCommand,
     commandHandler: (...args: any[]) => Promise<boolean>,
   ): void => {
-    if (registeredExtensionCommands.has(command)) {
-      console.warn(
-        `Command '${command}' is already registered. Skipping duplicate registration.`,
-      );
-      return;
-    }
-
-    const commandHandlerWithTelemetry = (args: any[]): Promise<boolean> => {
+    const commandHandlerWithTelemetry = (
+      ...args: any[]
+    ): Promise<boolean> => {
       this._telemetryService.track(new CommandRunTelemetryEvent(command));
 
-      return commandHandler(args);
+      return commandHandler(...args);
     };
+
+    // Participant commands also go through the shared handler registry so that
+    // the most recently constructed controller provides the implementation.
+    commandHandlerRegistry.set(command, commandHandlerWithTelemetry);
 
     const participant = this._participantController.getParticipant();
     if (!participant) {
       return;
     }
 
+    if (registeredExtensionCommands.has(command)) {
+      // The command dispatcher is already registered with VS Code; just
+      // ensure the shared participant gets disposed with this context.
+      this._context.subscriptions.push(participant);
+      return;
+    }
+
+    const dispatcher = async (...args: any[]): Promise<boolean> => {
+      const handler = commandHandlerRegistry.get(command);
+
+      if (!handler) {
+        console.warn(
+          `Command '${command}' was invoked but no handler is registered.`,
+        );
+        return false;
+      }
+
+      return handler(...args);
+    };
+
     try {
       this._context.subscriptions.push(
         participant,
-        vscode.commands.registerCommand(command, commandHandlerWithTelemetry),
+        vscode.commands.registerCommand(command, dispatcher),
       );
       registeredExtensionCommands.add(command);
     } catch (error) {
@@ -543,22 +563,42 @@ export default class MDBExtensionController implements vscode.Disposable {
     command: ExtensionCommand,
     commandHandler: (...args: any[]) => Promise<boolean>,
   ): void => {
+    const commandHandlerWithTelemetry = (
+      ...args: any[]
+    ): Promise<boolean> => {
+      this._telemetryService.track(new CommandRunTelemetryEvent(command));
+
+      return commandHandler(...args);
+    };
+
+    // Always update the handler registry so that the most recently
+    // constructed controller (for example, the test controller) provides
+    // the implementation for this command.
+    commandHandlerRegistry.set(command, commandHandlerWithTelemetry);
+
     if (registeredExtensionCommands.has(command)) {
-      console.warn(
-        `Command '${command}' is already registered. Skipping duplicate registration.`,
-      );
+      // Command is already registered with VS Code. The dispatcher installed
+      // during the first registration will read from commandHandlerRegistry
+      // and therefore use the updated handler.
       return;
     }
 
-    const commandHandlerWithTelemetry = (args: any[]): Promise<boolean> => {
-      this._telemetryService.track(new CommandRunTelemetryEvent(command));
+    const dispatcher = async (...args: any[]): Promise<boolean> => {
+      const handler = commandHandlerRegistry.get(command);
 
-      return commandHandler(args);
+      if (!handler) {
+        console.warn(
+          `Command '${command}' was invoked but no handler is registered.`,
+        );
+        return false;
+      }
+
+      return handler(...args);
     };
 
     try {
       this._context.subscriptions.push(
-        vscode.commands.registerCommand(command, commandHandlerWithTelemetry),
+        vscode.commands.registerCommand(command, dispatcher),
       );
       registeredExtensionCommands.add(command);
     } catch (error) {
