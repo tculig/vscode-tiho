@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import path from 'path';
+import crypto from 'crypto';
 import { EJSON } from 'bson';
 import type { Document } from 'bson';
 
@@ -33,6 +35,10 @@ import { PLAYGROUND_RESULT_SCHEME } from './playgroundResultProvider';
 import { StatusView } from '../views';
 import type { TelemetryService } from '../telemetry';
 import type { QueryWithCopilotCodeLensProvider } from './queryWithCopilotCodeLensProvider';
+
+const getNonce = (): string => {
+  return crypto.randomBytes(16).toString('base64');
+};
 
 const log = createLogger('editors controller');
 
@@ -300,6 +306,70 @@ export default class EditorsController {
     } catch (error) {
       void vscode.window.showErrorMessage(
         `Unable to open documents: ${formatError(error).message}`,
+      );
+
+      return false;
+    }
+  }
+
+  async openCollectionPreview(
+    namespace: string,
+    documents: Document[],
+  ): Promise<boolean> {
+    log.info('Open collection preview', namespace);
+
+    try {
+      const extensionPath = this._context.extensionPath;
+      const nonce = getNonce();
+
+      const panel = vscode.window.createWebviewPanel(
+        'mongodbPreview',
+        `Preview: ${namespace}`,
+        vscode.ViewColumn.One,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+          localResourceRoots: [
+            vscode.Uri.file(path.join(extensionPath, 'dist')),
+          ],
+        },
+      );
+
+      const previewAppUri = panel.webview.asWebviewUri(
+        vscode.Uri.file(path.join(extensionPath, 'dist', 'previewApp.js')),
+      );
+
+      panel.webview.html = `<!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none';
+                script-src 'nonce-${nonce}' vscode-resource: 'self' 'unsafe-inline' https:;
+                style-src vscode-resource: 'self' 'unsafe-inline';
+                img-src vscode-resource: 'self'"/>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Preview</title>
+          </head>
+          <body>
+            <div id="root"></div>
+            <script nonce="${nonce}" src="${previewAppUri}"></script>
+          </body>
+        </html>`;
+
+      // Send documents to webview
+      panel.webview.onDidReceiveMessage((message) => {
+        if (message.command === 'GET_DOCUMENTS') {
+          void panel.webview.postMessage({
+            command: 'LOAD_DOCUMENTS',
+            documents: JSON.parse(EJSON.stringify(documents)),
+          });
+        }
+      });
+
+      return true;
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `Unable to open preview: ${formatError(error).message}`,
       );
 
       return false;

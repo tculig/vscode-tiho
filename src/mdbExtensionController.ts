@@ -12,6 +12,7 @@ import ConnectionController from './connectionController';
 import type ConnectionTreeItem from './explorer/connectionTreeItem';
 import type DatabaseTreeItem from './explorer/databaseTreeItem';
 import type DocumentListTreeItem from './explorer/documentListTreeItem';
+import type ShowPreviewTreeItem from './explorer/documentListPreviewItem';
 import { DocumentSource } from './documentSource';
 import type DocumentTreeItem from './explorer/documentTreeItem';
 import EditDocumentCodeLensProvider from './editors/editDocumentCodeLensProvider';
@@ -748,6 +749,18 @@ export default class MDBExtensionController implements vscode.Disposable {
         const namespace = `${element.databaseName}.${element.collectionName}`;
 
         return this._editorsController.onViewCollectionDocuments(namespace);
+      },
+    );
+    this.registerCommand(
+      EXTENSION_COMMANDS.MDB_OPEN_COLLECTION_PREVIEW,
+      async (element: ShowPreviewTreeItem): Promise<boolean> => {
+        const namespace = element.namespace;
+        const documents = await element.loadPreview();
+
+        return this._editorsController.openCollectionPreview(
+          namespace,
+          documents,
+        );
       },
     );
     this.registerCommand(

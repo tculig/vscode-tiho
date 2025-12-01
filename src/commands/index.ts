@@ -56,6 +56,7 @@ enum EXTENSION_COMMANDS {
   MDB_COPY_COLLECTION_NAME = 'mdb.copyCollectionName',
   MDB_DROP_COLLECTION = 'mdb.dropCollection',
   MDB_VIEW_COLLECTION_DOCUMENTS = 'mdb.viewCollectionDocuments',
+  MDB_OPEN_COLLECTION_PREVIEW = 'mdb.openCollectionPreview',
   MDB_REFRESH_COLLECTION = 'mdb.refreshCollection',
   MDB_REFRESH_DOCUMENT_LIST = 'mdb.refreshDocumentList',
   MDB_INSERT_DOCUMENT_FROM_TREE_VIEW = 'mdb.insertDocumentFromTreeView',

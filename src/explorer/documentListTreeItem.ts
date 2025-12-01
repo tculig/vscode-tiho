@@ -23,7 +23,7 @@ export enum CollectionTypes {
   timeseries = 'timeseries',
 }
 
-const ITEM_LABEL = 'Documents';
+const ITEM_LABEL = 'Gerbils';
 
 class ShowMoreDocumentsTreeItem extends vscode.TreeItem {
   // This is the identifier we use to identify this tree item when a tree item
