@@ -202,9 +202,31 @@ const DocumentTreeView: React.FC<DocumentTreeViewProps> = ({ document }) => {
     });
   };
 
+  // Check if value is an ObjectId (EJSON format with $oid)
+  const isObjectId = (value: unknown): boolean => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const obj = value as Record<string, unknown>;
+      return '$oid' in obj && typeof obj.$oid === 'string';
+    }
+    return false;
+  };
+
+  // Format ObjectId for inline display
+  const formatObjectId = (value: unknown): string => {
+    if (value && typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      if ('$oid' in obj && typeof obj.$oid === 'string') {
+        return `ObjectId('${obj.$oid}')`;
+      }
+    }
+    return String(value);
+  };
+
   const getNodeType = (value: unknown): TreeNode['type'] => {
     if (value === null) return 'null';
     if (Array.isArray(value)) return 'array';
+    // Treat ObjectId as a string (inline display) rather than expandable object
+    if (isObjectId(value)) return 'string';
     if (typeof value === 'object') return 'object';
     if (typeof value === 'number') return 'number';
     if (typeof value === 'boolean') return 'boolean';
@@ -227,7 +249,10 @@ const DocumentTreeView: React.FC<DocumentTreeViewProps> = ({ document }) => {
       const count = Object.keys(value as Record<string, unknown>).length;
       return isExpanded ? '{' : `Object (${count})`;
     }
-    // String type
+    // String type - check if it's an ObjectId first
+    if (isObjectId(value)) {
+      return formatObjectId(value);
+    }
     const strValue = String(value);
     // If it's already quoted or looks like a special type (ObjectId, etc.), return as-is
     if (strValue.startsWith('"') || strValue.match(/^[A-Z][a-z]+\(/)) {
