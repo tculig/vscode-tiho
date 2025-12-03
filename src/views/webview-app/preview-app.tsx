@@ -135,7 +135,7 @@ const PreviewApp: React.FC = () => {
   const darkMode = useDetectVsCodeDarkMode();
   const [documents, setDocuments] = useState<PreviewDocument[]>([]);
   const [sortOption, setSortOption] = useState<SortOption>('default');
-  const [itemsPerPage, setItemsPerPage] = useState<number>(25);
+  const [itemsPerPage, setItemsPerPage] = useState<number>(10);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [viewType, setViewType] = useState<ViewType>('tree');
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);

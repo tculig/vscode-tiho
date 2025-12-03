@@ -98,7 +98,7 @@ export default class ShowPreviewTreeItem extends vscode.TreeItem {
       this.tooltip = getTooltip(type, cachedDocumentCount);
     }
 
-      async loadPreview(options?: { sort?: 'default' | 'asc' | 'desc' }): Promise<any[]> {
+      async loadPreview(options?: { sort?: 'default' | 'asc' | 'desc'; limit?: number }): Promise<any[]> {
         if (this.type === CollectionTypes.view) {
           return [];
         }
@@ -108,7 +108,7 @@ export default class ShowPreviewTreeItem extends vscode.TreeItem {
 
         try {
           const findOptions: { limit: number; sort?: { _id: 1 | -1 } } = {
-            limit: this._maxDocumentsToShow,
+            limit: options?.limit ?? this._maxDocumentsToShow,
           };
 
           // Add sort if specified (not 'default')

@@ -317,6 +317,7 @@ export default class EditorsController {
     documents: Document[],
     fetchDocuments?: (options?: {
       sort?: 'default' | 'asc' | 'desc';
+      limit?: number;
     }) => Promise<Document[]>,
     initialTotalCount?: number,
     getTotalCount?: () => Promise<number>,
@@ -362,62 +363,76 @@ export default class EditorsController {
         </html>`;
 
       // Keep track of current documents, sort option, and total count
+      // Fetch limit is fixed - pagination is handled client-side
+      const FETCH_LIMIT = 100;
       let currentDocuments = documents;
       let currentSort: 'default' | 'asc' | 'desc' = 'default';
       let totalCount = initialTotalCount ?? documents.length;
+
+      // Helper to send current documents to webview
+      const sendDocuments = (): void => {
+        void panel.webview.postMessage({
+          command: 'LOAD_DOCUMENTS',
+          documents: JSON.parse(EJSON.stringify(currentDocuments)),
+          totalCount,
+        });
+      };
+
+      // Helper to handle errors
+      const handleError = (operation: string, error: unknown): void => {
+        log.error(`${operation} failed:`, error);
+        void panel.webview.postMessage({
+          command: 'REFRESH_ERROR',
+          error: formatError(error).message,
+        });
+      };
+
+      // Helper to fetch and update documents
+      const fetchAndUpdateDocuments = async (operation: string): Promise<void> => {
+        if (fetchDocuments) {
+          log.info(`${operation} with sort:`, currentSort, 'limit:', FETCH_LIMIT);
+          currentDocuments = await fetchDocuments({ sort: currentSort, limit: FETCH_LIMIT });
+          log.info(`${operation} complete, count:`, currentDocuments.length);
+        }
+      };
 
       // Send documents to webview
       panel.webview.onDidReceiveMessage(
         async (message: { command: string; sort?: 'default' | 'asc' | 'desc' }) => {
           log.info('Preview received message:', message.command);
-          if (message.command === 'GET_DOCUMENTS') {
-            void panel.webview.postMessage({
-              command: 'LOAD_DOCUMENTS',
-              documents: JSON.parse(EJSON.stringify(currentDocuments)),
-              totalCount,
-            });
-          } else if (message.command === 'REFRESH_DOCUMENTS') {
-            try {
-              if (fetchDocuments) {
-                log.info('Refreshing documents with sort:', currentSort);
-                currentDocuments = await fetchDocuments({ sort: currentSort });
-                log.info('Documents refreshed, count:', currentDocuments.length);
+
+          switch (message.command) {
+            case 'GET_DOCUMENTS':
+              sendDocuments();
+              break;
+
+            case 'REFRESH_DOCUMENTS':
+              try {
+                await fetchAndUpdateDocuments('Refreshing documents');
+                if (getTotalCount) {
+                  totalCount = await getTotalCount();
+                }
+                sendDocuments();
+              } catch (error) {
+                handleError('Refresh documents', error);
               }
-              if (getTotalCount) {
-                totalCount = await getTotalCount();
+              break;
+
+            case 'SORT_DOCUMENTS':
+              try {
+                if (message.sort) {
+                  currentSort = message.sort;
+                  await fetchAndUpdateDocuments('Sorting documents');
+                }
+                sendDocuments();
+              } catch (error) {
+                handleError('Sort documents', error);
               }
-              void panel.webview.postMessage({
-                command: 'LOAD_DOCUMENTS',
-                documents: JSON.parse(EJSON.stringify(currentDocuments)),
-                totalCount,
-              });
-            } catch (error) {
-              log.error('Refresh documents failed:', error);
-              void panel.webview.postMessage({
-                command: 'REFRESH_ERROR',
-                error: formatError(error).message,
-              });
-            }
-          } else if (message.command === 'SORT_DOCUMENTS') {
-            try {
-              if (fetchDocuments && message.sort) {
-                currentSort = message.sort;
-                log.info('Sorting documents:', currentSort);
-                currentDocuments = await fetchDocuments({ sort: currentSort });
-                log.info('Documents sorted, count:', currentDocuments.length);
-              }
-              void panel.webview.postMessage({
-                command: 'LOAD_DOCUMENTS',
-                documents: JSON.parse(EJSON.stringify(currentDocuments)),
-                totalCount,
-              });
-            } catch (error) {
-              log.error('Sort documents failed:', error);
-              void panel.webview.postMessage({
-                command: 'REFRESH_ERROR',
-                error: formatError(error).message,
-              });
-            }
+              break;
+
+            default:
+              log.info('Unknown command:', message.command);
+              break;
           }
         },
       );
