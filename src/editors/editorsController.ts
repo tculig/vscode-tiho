@@ -315,7 +315,11 @@ export default class EditorsController {
   openCollectionPreview(
     namespace: string,
     documents: Document[],
-    fetchDocuments?: () => Promise<Document[]>,
+    fetchDocuments?: (options?: {
+      sort?: 'default' | 'asc' | 'desc';
+    }) => Promise<Document[]>,
+    initialTotalCount?: number,
+    getTotalCount?: () => Promise<number>,
   ): boolean {
     log.info('Open collection preview', namespace);
 
@@ -357,31 +361,58 @@ export default class EditorsController {
           </body>
         </html>`;
 
-      // Keep track of current documents for refresh
+      // Keep track of current documents, sort option, and total count
       let currentDocuments = documents;
+      let currentSort: 'default' | 'asc' | 'desc' = 'default';
+      let totalCount = initialTotalCount ?? documents.length;
 
       // Send documents to webview
       panel.webview.onDidReceiveMessage(
-        async (message: { command: string }) => {
+        async (message: { command: string; sort?: 'default' | 'asc' | 'desc' }) => {
           log.info('Preview received message:', message.command);
           if (message.command === 'GET_DOCUMENTS') {
             void panel.webview.postMessage({
               command: 'LOAD_DOCUMENTS',
               documents: JSON.parse(EJSON.stringify(currentDocuments)),
+              totalCount,
             });
           } else if (message.command === 'REFRESH_DOCUMENTS') {
             try {
               if (fetchDocuments) {
-                log.info('Refreshing documents...');
-                currentDocuments = await fetchDocuments();
+                log.info('Refreshing documents with sort:', currentSort);
+                currentDocuments = await fetchDocuments({ sort: currentSort });
                 log.info('Documents refreshed, count:', currentDocuments.length);
+              }
+              if (getTotalCount) {
+                totalCount = await getTotalCount();
               }
               void panel.webview.postMessage({
                 command: 'LOAD_DOCUMENTS',
                 documents: JSON.parse(EJSON.stringify(currentDocuments)),
+                totalCount,
               });
             } catch (error) {
               log.error('Refresh documents failed:', error);
+              void panel.webview.postMessage({
+                command: 'REFRESH_ERROR',
+                error: formatError(error).message,
+              });
+            }
+          } else if (message.command === 'SORT_DOCUMENTS') {
+            try {
+              if (fetchDocuments && message.sort) {
+                currentSort = message.sort;
+                log.info('Sorting documents:', currentSort);
+                currentDocuments = await fetchDocuments({ sort: currentSort });
+                log.info('Documents sorted, count:', currentDocuments.length);
+              }
+              void panel.webview.postMessage({
+                command: 'LOAD_DOCUMENTS',
+                documents: JSON.parse(EJSON.stringify(currentDocuments)),
+                totalCount,
+              });
+            } catch (error) {
+              log.error('Sort documents failed:', error);
               void panel.webview.postMessage({
                 command: 'REFRESH_ERROR',
                 error: formatError(error).message,

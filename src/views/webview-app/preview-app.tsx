@@ -140,6 +140,7 @@ const PreviewApp: React.FC = () => {
   const [viewType, setViewType] = useState<ViewType>('tree');
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [totalCountInCollection, setTotalCountInCollection] = useState<number | null>(null);
 
   const totalDocuments = documents.length;
   const totalPages = Math.max(1, Math.ceil(totalDocuments / itemsPerPage));
@@ -179,6 +180,9 @@ const PreviewApp: React.FC = () => {
         // Ensure minimum loading duration before hiding loader
         setTimeout(() => {
           setDocuments(message.documents || []);
+          if (message.totalCount !== undefined) {
+            setTotalCountInCollection(message.totalCount);
+          }
           setCurrentPage(1); // Reset to first page when new documents are loaded
           setIsLoading(false);
         }, remainingTime);
@@ -223,8 +227,11 @@ const PreviewApp: React.FC = () => {
   };
 
   const handleSortChange = (value: string): void => {
-    setSortOption(value as SortOption);
-    // TODO: Implement actual sorting logic or send message to extension
+    const newSortOption = value as SortOption;
+    setSortOption(newSortOption);
+    loadingStartTimeRef.current = Date.now();
+    setIsLoading(true);
+    vscodeApi.postMessage({ command: 'SORT_DOCUMENTS', sort: newSortOption });
   };
 
   const handleItemsPerPageChange = (value: string): void => {
@@ -320,7 +327,7 @@ const PreviewApp: React.FC = () => {
 
             {/* Pagination info */}
             <span className={paginationInfoStyles}>
-              {startItem}-{endItem} of {totalDocuments}
+              {startItem}-{endItem} of {totalCountInCollection ?? totalDocuments}
             </span>
 
             {/* Page navigation arrows */}

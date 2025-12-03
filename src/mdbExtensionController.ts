@@ -756,15 +756,22 @@ export default class MDBExtensionController implements vscode.Disposable {
       async (element: ShowPreviewTreeItem): Promise<boolean> => {
         const namespace = element.namespace;
         const documents = await element.loadPreview();
+        const totalCount = await element.getTotalCount();
 
-        // Pass a fetch function to allow refreshing documents
-        const fetchDocuments = async (): Promise<Document[]> =>
-          element.loadPreview();
+        // Pass a fetch function to allow refreshing/sorting documents
+        const fetchDocuments = async (options?: {
+          sort?: 'default' | 'asc' | 'desc';
+        }): Promise<Document[]> => element.loadPreview(options);
+
+        // Pass a function to get the total count
+        const getTotalCount = (): Promise<number> => element.getTotalCount();
 
         return this._editorsController.openCollectionPreview(
           namespace,
           documents,
           fetchDocuments,
+          totalCount,
+          getTotalCount,
         );
       },
     );

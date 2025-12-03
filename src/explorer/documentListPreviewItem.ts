@@ -98,7 +98,7 @@ export default class ShowPreviewTreeItem extends vscode.TreeItem {
       this.tooltip = getTooltip(type, cachedDocumentCount);
     }
 
-      async loadPreview(): Promise<any[]> {
+      async loadPreview(options?: { sort?: 'default' | 'asc' | 'desc' }): Promise<any[]> {
         if (this.type === CollectionTypes.view) {
           return [];
         }
@@ -107,10 +107,21 @@ export default class ShowPreviewTreeItem extends vscode.TreeItem {
         let documents;
 
         try {
+          const findOptions: { limit: number; sort?: { _id: 1 | -1 } } = {
+            limit: this._maxDocumentsToShow,
+          };
+
+          // Add sort if specified (not 'default')
+          if (options?.sort === 'asc') {
+            findOptions.sort = { _id: 1 };
+          } else if (options?.sort === 'desc') {
+            findOptions.sort = { _id: -1 };
+          }
+
           documents = await this._dataService.find(
             this.namespace,
             {}, // No filter.
-            { limit: this._maxDocumentsToShow },
+            findOptions,
           );
         } catch (error) {
           void vscode.window.showErrorMessage(
@@ -120,5 +131,22 @@ export default class ShowPreviewTreeItem extends vscode.TreeItem {
         }
 
         return documents;
+      }
+
+      async getTotalCount(): Promise<number> {
+        if (this.type === CollectionTypes.view || this.type === CollectionTypes.timeseries) {
+          return 0;
+        }
+
+        try {
+          const count = await this._dataService.estimatedCount(
+            this.namespace,
+            {},
+            undefined,
+          );
+          return count;
+        } catch (error) {
+          return 0;
+        }
       }
 }
