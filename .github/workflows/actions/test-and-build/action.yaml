@@ -2,20 +2,28 @@ name: Run test and build
 description: Test and build action, reused among workflows
 inputs:
   SEGMENT_KEY:
+    description: Segment analytics API key
     required: true
   ARTIFACTORY_HOST:
+    description: Artifactory host URL
     required: true
   ARTIFACTORY_PASSWORD:
+    description: Artifactory authentication password
     required: true
   ARTIFACTORY_USERNAME:
+    description: Artifactory authentication username
     required: true
   GARASIGN_PASSWORD:
+    description: Garasign signing service password
     required: true
   GARASIGN_USERNAME:
+    description: Garasign signing service username
     required: true
   SNYK_TOKEN:
+    description: Snyk API token for security scanning
     required: true
   JIRA_API_TOKEN:
+    description: Jira API token for creating vulnerability tickets
     required: true
 
 runs:

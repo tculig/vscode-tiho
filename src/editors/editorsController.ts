@@ -312,10 +312,11 @@ export default class EditorsController {
     }
   }
 
-  async openCollectionPreview(
+  openCollectionPreview(
     namespace: string,
     documents: Document[],
-  ): Promise<boolean> {
+    fetchDocuments?: () => Promise<Document[]>,
+  ): boolean {
     log.info('Open collection preview', namespace);
 
     try {
@@ -356,15 +357,39 @@ export default class EditorsController {
           </body>
         </html>`;
 
+      // Keep track of current documents for refresh
+      let currentDocuments = documents;
+
       // Send documents to webview
-      panel.webview.onDidReceiveMessage((message) => {
-        if (message.command === 'GET_DOCUMENTS') {
-          void panel.webview.postMessage({
-            command: 'LOAD_DOCUMENTS',
-            documents: JSON.parse(EJSON.stringify(documents)),
-          });
-        }
-      });
+      panel.webview.onDidReceiveMessage(
+        async (message: { command: string }) => {
+          log.info('Preview received message:', message.command);
+          if (message.command === 'GET_DOCUMENTS') {
+            void panel.webview.postMessage({
+              command: 'LOAD_DOCUMENTS',
+              documents: JSON.parse(EJSON.stringify(currentDocuments)),
+            });
+          } else if (message.command === 'REFRESH_DOCUMENTS') {
+            try {
+              if (fetchDocuments) {
+                log.info('Refreshing documents...');
+                currentDocuments = await fetchDocuments();
+                log.info('Documents refreshed, count:', currentDocuments.length);
+              }
+              void panel.webview.postMessage({
+                command: 'LOAD_DOCUMENTS',
+                documents: JSON.parse(EJSON.stringify(currentDocuments)),
+              });
+            } catch (error) {
+              log.error('Refresh documents failed:', error);
+              void panel.webview.postMessage({
+                command: 'REFRESH_ERROR',
+                error: formatError(error).message,
+              });
+            }
+          }
+        },
+      );
 
       return true;
     } catch (error) {

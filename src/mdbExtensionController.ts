@@ -757,9 +757,14 @@ export default class MDBExtensionController implements vscode.Disposable {
         const namespace = element.namespace;
         const documents = await element.loadPreview();
 
+        // Pass a fetch function to allow refreshing documents
+        const fetchDocuments = async (): Promise<Document[]> =>
+          element.loadPreview();
+
         return this._editorsController.openCollectionPreview(
           namespace,
           documents,
+          fetchDocuments,
         );
       },
     );

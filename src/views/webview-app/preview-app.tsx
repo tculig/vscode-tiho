@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
   LeafyGreenProvider,
   Icon,
@@ -79,6 +79,50 @@ const settingsMenuStyles = css({
   position: 'relative',
 });
 
+const refreshButtonStyles = css({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '4px',
+  background: 'none',
+  border: 'none',
+  color: 'inherit',
+  cursor: 'pointer',
+  padding: '4px 8px',
+  borderRadius: '4px',
+  fontSize: '13px',
+  fontWeight: 500,
+  '&:hover': {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+});
+
+const paginationArrowsStyles = css({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0',
+});
+
+const spinnerKeyframes = `
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+`;
+
+const loadingOverlayStyles = css({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '32px',
+  flexDirection: 'column',
+  gap: '12px',
+});
+
+const spinnerStyles = css({
+  animation: 'spin 1s linear infinite',
+  display: 'inline-block',
+});
+
 const PreviewApp: React.FC = () => {
   const darkMode = useDetectVsCodeDarkMode();
   const [documents, setDocuments] = useState<PreviewDocument[]>([]);
@@ -87,6 +131,7 @@ const PreviewApp: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [viewType, setViewType] = useState<ViewType>('tree');
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   const totalDocuments = documents.length;
   const totalPages = Math.max(1, Math.ceil(totalDocuments / itemsPerPage));
@@ -109,30 +154,52 @@ const PreviewApp: React.FC = () => {
   const startItem = totalDocuments === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
   const endItem = Math.min(currentPage * itemsPerPage, totalDocuments);
 
-  useEffect(() => {
-    const vscode = acquireVsCodeApi();
+  // Store vscode API reference - acquireVsCodeApi should only be called once
+  const vscodeApi = useMemo(() => acquireVsCodeApi(), []);
 
+  // Track when loading started for minimum loading duration
+  const loadingStartTimeRef = useRef<number>(Date.now());
+  const MIN_LOADING_DURATION_MS = 500;
+
+  useEffect(() => {
     const handleMessage = (event: MessageEvent): void => {
       const message = event.data;
       if (message.command === 'LOAD_DOCUMENTS') {
-        setDocuments(message.documents || []);
-        setCurrentPage(1); // Reset to first page when new documents are loaded
+        const elapsed = Date.now() - loadingStartTimeRef.current;
+        const remainingTime = Math.max(0, MIN_LOADING_DURATION_MS - elapsed);
+
+        // Ensure minimum loading duration before hiding loader
+        setTimeout(() => {
+          setDocuments(message.documents || []);
+          setCurrentPage(1); // Reset to first page when new documents are loaded
+          setIsLoading(false);
+        }, remainingTime);
+      } else if (message.command === 'REFRESH_ERROR') {
+        const elapsed = Date.now() - loadingStartTimeRef.current;
+        const remainingTime = Math.max(0, MIN_LOADING_DURATION_MS - elapsed);
+
+        // Ensure minimum loading duration before hiding loader
+        setTimeout(() => {
+          setIsLoading(false);
+          // Could show an error message here if needed
+        }, remainingTime);
       }
     };
 
     window.addEventListener('message', handleMessage);
 
     // Request initial documents
-    vscode.postMessage({ command: 'GET_DOCUMENTS' });
+    vscodeApi.postMessage({ command: 'GET_DOCUMENTS' });
 
     return () => {
       window.removeEventListener('message', handleMessage);
     };
-  }, []);
+  }, [vscodeApi]);
 
   const handleRefresh = (): void => {
-    const vscode = acquireVsCodeApi();
-    vscode.postMessage({ command: 'REFRESH_DOCUMENTS' });
+    loadingStartTimeRef.current = Date.now();
+    setIsLoading(true);
+    vscodeApi.postMessage({ command: 'REFRESH_DOCUMENTS' });
   };
 
   const handlePrevPage = (): void => {
@@ -194,17 +261,17 @@ const PreviewApp: React.FC = () => {
 
           {/* Right side - Actions */}
           <div className={toolbarRightStyles}>
-            {/* Refresh */}
-            <div className={toolbarGroupStyles}>
-              <IconButton
-                aria-label="Refresh"
-                title="Refresh"
-                onClick={handleRefresh}
-              >
-                <Icon glyph="Refresh" />
-              </IconButton>
-              <span className={toolbarLabelStyles}>Refresh</span>
-            </div>
+            {/* Refresh - single button with icon and text */}
+            <button
+              className={refreshButtonStyles}
+              onClick={handleRefresh}
+              title="Refresh"
+              disabled={isLoading}
+              style={{ opacity: isLoading ? 0.5 : 1, cursor: isLoading ? 'not-allowed' : 'pointer' }}
+            >
+              <Icon glyph="Refresh" size="small" />
+              <span>Refresh</span>
+            </button>
 
             {/* Sort */}
             <div className={toolbarGroupStyles}>
@@ -225,22 +292,20 @@ const PreviewApp: React.FC = () => {
             </div>
 
             {/* Items per page */}
-            <div className={toolbarGroupStyles}>
-              <div className={narrowSelectStyles}>
-                <Select
-                  aria-label="Items per page"
-                  value={itemsPerPage.toString()}
-                  onChange={handleItemsPerPageChange}
-                  size="xsmall"
-                  allowDeselect={false}
-                >
-                  {ITEMS_PER_PAGE_OPTIONS.map((option) => (
-                    <Option key={option} value={option.toString()}>
-                      {option}
-                    </Option>
-                  ))}
-                </Select>
-              </div>
+            <div className={narrowSelectStyles}>
+              <Select
+                aria-label="Items per page"
+                value={itemsPerPage.toString()}
+                onChange={handleItemsPerPageChange}
+                size="xsmall"
+                allowDeselect={false}
+              >
+                {ITEMS_PER_PAGE_OPTIONS.map((option) => (
+                  <Option key={option} value={option.toString()}>
+                    {option}
+                  </Option>
+                ))}
+              </Select>
             </div>
 
             {/* Pagination info */}
@@ -248,15 +313,15 @@ const PreviewApp: React.FC = () => {
               {startItem}-{endItem} of {totalDocuments}
             </span>
 
-            {/* Page navigation */}
-            <div className={toolbarGroupStyles}>
+            {/* Page navigation arrows */}
+            <div className={paginationArrowsStyles}>
               <IconButton
                 aria-label="Previous page"
                 title="Previous page"
                 onClick={handlePrevPage}
                 disabled={currentPage <= 1}
               >
-                <Icon glyph="ChevronLeft" />
+                <Icon glyph="CaretLeft" />
               </IconButton>
               <IconButton
                 aria-label="Next page"
@@ -264,25 +329,23 @@ const PreviewApp: React.FC = () => {
                 onClick={handleNextPage}
                 disabled={currentPage >= totalPages}
               >
-                <Icon glyph="ChevronRight" />
+                <Icon glyph="CaretRight" />
               </IconButton>
             </div>
 
             {/* View type */}
-            <div className={toolbarGroupStyles}>
-              <div className={selectWrapperStyles}>
-                <Select
-                  aria-label="View type"
-                  value={viewType}
-                  onChange={handleViewTypeChange}
-                  size="xsmall"
-                  allowDeselect={false}
-                >
-                  <Option value="tree">Tree view</Option>
-                  <Option value="json">JSON view</Option>
-                  <Option value="table">Table view</Option>
-                </Select>
-              </div>
+            <div className={selectWrapperStyles}>
+              <Select
+                aria-label="View type"
+                value={viewType}
+                onChange={handleViewTypeChange}
+                size="xsmall"
+                allowDeselect={false}
+              >
+                <Option value="tree">Tree view</Option>
+                <Option value="json">JSON view</Option>
+                <Option value="table">Table view</Option>
+              </Select>
             </div>
 
             {/* Settings dropdown */}
@@ -311,17 +374,33 @@ const PreviewApp: React.FC = () => {
 
         {/* Documents content */}
         <div style={{ padding: '16px' }}>
-          {displayedDocuments.map((doc, index) => (
-            <DocumentTreeView key={`${currentPage}-${index}`} document={doc} />
-          ))}
-          {displayedDocuments.length === 0 && (
-            <div style={{
-              textAlign: 'center',
-              padding: '32px',
-              color: darkMode ? '#888' : '#666'
-            }}>
-              No documents to display
+          {/* Inject keyframes for spinner animation */}
+          <style>{spinnerKeyframes}</style>
+
+          {isLoading ? (
+            <div className={loadingOverlayStyles}>
+              <span className={spinnerStyles}>
+                <Icon glyph="Refresh" size="large" />
+              </span>
+              <span style={{ color: darkMode ? '#888' : '#666' }}>
+                Loading documents...
+              </span>
             </div>
+          ) : (
+            <>
+              {displayedDocuments.map((doc, index) => (
+                <DocumentTreeView key={`${currentPage}-${index}`} document={doc} />
+              ))}
+              {displayedDocuments.length === 0 && (
+                <div style={{
+                  textAlign: 'center',
+                  padding: '32px',
+                  color: darkMode ? '#888' : '#666'
+                }}>
+                  No documents to display
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
