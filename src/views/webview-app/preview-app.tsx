@@ -68,11 +68,19 @@ const paginationInfoStyles = css({
 });
 
 const selectWrapperStyles = css({
-  minWidth: '100px',
+  // Style the select button to fit content width
+  '& button': {
+    width: 'auto',
+    minWidth: 'unset',
+  },
 });
 
 const narrowSelectStyles = css({
-  minWidth: '60px',
+  // Style the select button to fit content width
+  '& button': {
+    width: 'auto',
+    minWidth: 'unset',
+  },
 });
 
 const settingsMenuStyles = css({
@@ -283,6 +291,7 @@ const PreviewApp: React.FC = () => {
                   onChange={handleSortChange}
                   size="xsmall"
                   allowDeselect={false}
+                  dropdownWidthBasis="option"
                 >
                   <Option value="default">Default</Option>
                   <Option value="asc">Ascending</Option>
@@ -299,6 +308,7 @@ const PreviewApp: React.FC = () => {
                 onChange={handleItemsPerPageChange}
                 size="xsmall"
                 allowDeselect={false}
+                dropdownWidthBasis="option"
               >
                 {ITEMS_PER_PAGE_OPTIONS.map((option) => (
                   <Option key={option} value={option.toString()}>
@@ -341,6 +351,7 @@ const PreviewApp: React.FC = () => {
                 onChange={handleViewTypeChange}
                 size="xsmall"
                 allowDeselect={false}
+                dropdownWidthBasis="option"
               >
                 <Option value="tree">Tree view</Option>
                 <Option value="json">JSON view</Option>
