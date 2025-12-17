@@ -33,6 +33,7 @@ import { PLAYGROUND_RESULT_SCHEME } from './playgroundResultProvider';
 import { StatusView } from '../views';
 import type { TelemetryService } from '../telemetry';
 import type { QueryWithCopilotCodeLensProvider } from './queryWithCopilotCodeLensProvider';
+import { createWebviewPanel, getWebviewHtml } from '../utils/webviewHelpers';
 
 const log = createLogger('editors controller');
 
@@ -104,6 +105,7 @@ export default class EditorsController {
   _editDocumentCodeLensProvider: EditDocumentCodeLensProvider;
   _collectionDocumentsCodeLensProvider: CollectionDocumentsCodeLensProvider;
   _queryWithCopilotCodeLensProvider: QueryWithCopilotCodeLensProvider;
+  _activePreviewPanels: vscode.WebviewPanel[] = [];
 
   constructor({
     context,
@@ -301,6 +303,64 @@ export default class EditorsController {
       );
 
       return false;
+    }
+  }
+
+  async openCollectionPreview(
+    namespace: string,
+    documents: Document[],
+  ): Promise<boolean> {
+    log.info('Open collection preview', namespace);
+
+    try {
+      const extensionPath = this._context.extensionPath;
+
+      const panel = createWebviewPanel({
+        viewType: 'collectionPreviewWebview',
+        title: `Preview: ${namespace}`,
+        extensionPath,
+        iconName: 'documents.svg',
+      });
+
+      // Track active panels and handle disposal
+      panel.onDidDispose(() => this.onPreviewPanelClosed(panel));
+      this._activePreviewPanels.push(panel);
+
+      panel.webview.html = getWebviewHtml({
+        extensionPath,
+        webview: panel.webview,
+        scriptName: 'previewApp.js',
+        title: 'Preview',
+      });
+
+      // Handle messages from the webview with proper cleanup
+      panel.webview.onDidReceiveMessage(
+        (message) => {
+          if (message.command === 'GET_DOCUMENTS') {
+            void panel.webview.postMessage({
+              command: 'LOAD_DOCUMENTS',
+              documents: JSON.parse(EJSON.stringify(documents)),
+            });
+          }
+        },
+        undefined,
+        this._context.subscriptions,
+      );
+
+      return true;
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `Unable to open preview: ${formatError(error).message}`,
+      );
+
+      return false;
+    }
+  }
+
+  private onPreviewPanelClosed(panel: vscode.WebviewPanel): void {
+    const panelIndex = this._activePreviewPanels.indexOf(panel);
+    if (panelIndex !== -1) {
+      this._activePreviewPanels.splice(panelIndex, 1);
     }
   }
 
