@@ -34,6 +34,10 @@ import { StatusView } from '../views';
 import type { TelemetryService } from '../telemetry';
 import type { QueryWithCopilotCodeLensProvider } from './queryWithCopilotCodeLensProvider';
 import { createWebviewPanel, getWebviewHtml } from '../utils/webviewHelpers';
+import {
+  PreviewMessageType,
+  type SortOption,
+} from '../views/data-browsing-app/extension-app-message-constants';
 
 const log = createLogger('editors controller');
 
@@ -310,7 +314,7 @@ export default class EditorsController {
     namespace: string,
     documents: Document[],
     fetchDocuments?: (options?: {
-      sort?: 'default' | 'asc' | 'desc';
+      sort?: SortOption;
       limit?: number;
     }) => Promise<Document[]>,
     initialTotalCount?: number,
@@ -341,13 +345,13 @@ export default class EditorsController {
       // Fetch limit is fixed - pagination is handled client-side
       const FETCH_LIMIT = 100;
       let currentDocuments = documents;
-      let currentSort: 'default' | 'asc' | 'desc' = 'default';
+      let currentSort: SortOption = 'default';
       let totalCount = initialTotalCount ?? documents.length;
 
       // Helper to send current documents to webview
       const sendDocuments = (): void => {
         void panel.webview.postMessage({
-          command: 'LOAD_DOCUMENTS',
+          command: PreviewMessageType.loadDocuments,
           documents: JSON.parse(EJSON.stringify(currentDocuments)),
           totalCount,
         });
@@ -357,7 +361,7 @@ export default class EditorsController {
       const handleError = (operation: string, error: unknown): void => {
         log.error(`${operation} failed:`, error);
         void panel.webview.postMessage({
-          command: 'REFRESH_ERROR',
+          command: PreviewMessageType.refreshError,
           error: formatError(error).message,
         });
       };
@@ -383,18 +387,15 @@ export default class EditorsController {
 
       // Send documents to webview
       panel.webview.onDidReceiveMessage(
-        async (message: {
-          command: string;
-          sort?: 'default' | 'asc' | 'desc';
-        }) => {
+        async (message: { command: string; sort?: SortOption }) => {
           log.info('Preview received message:', message.command);
 
           switch (message.command) {
-            case 'GET_DOCUMENTS':
+            case PreviewMessageType.getDocuments:
               sendDocuments();
               break;
 
-            case 'REFRESH_DOCUMENTS':
+            case PreviewMessageType.refreshDocuments:
               try {
                 await fetchAndUpdateDocuments('Refreshing documents');
                 if (getTotalCount) {
@@ -406,7 +407,7 @@ export default class EditorsController {
               }
               break;
 
-            case 'SORT_DOCUMENTS':
+            case PreviewMessageType.sortDocuments:
               try {
                 if (message.sort) {
                   currentSort = message.sort;

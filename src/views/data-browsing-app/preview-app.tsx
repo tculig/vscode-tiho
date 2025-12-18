@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   LeafyGreenProvider,
   Icon,
@@ -10,20 +10,22 @@ import {
   css,
   spacing,
 } from '@mongodb-js/compass-components';
-import { useDetectVsCodeDarkMode } from '../webview-app/use-detect-vscode-dark-mode';
+import { useDetectVsCodeDarkMode } from './use-detect-vscode-dark-mode';
+import {
+  PreviewMessageType,
+  type MessageFromExtensionToWebview,
+  type SortOption,
+} from './extension-app-message-constants';
+import {
+  sendGetDocuments,
+  sendRefreshDocuments,
+  sendSortDocuments,
+} from './vscode-api';
 import DocumentTreeView from './document-tree-view';
-
-declare const acquireVsCodeApi: () => {
-  postMessage: (message: unknown) => void;
-  getState: () => unknown;
-  setState: (state: unknown) => void;
-};
 
 interface PreviewDocument {
   [key: string]: unknown;
 }
-
-type SortOption = 'default' | 'asc' | 'desc';
 type ViewType = 'tree' | 'json' | 'table';
 
 const ITEMS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
@@ -140,17 +142,14 @@ const PreviewApp: React.FC = () => {
   const startItem = totalDocuments === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
   const endItem = Math.min(currentPage * itemsPerPage, totalDocuments);
 
-  // Store vscode API reference - acquireVsCodeApi should only be called once
-  const vscodeApi = useMemo(() => acquireVsCodeApi(), []);
-
   // Track when loading started for minimum loading duration
   const loadingStartTimeRef = useRef<number>(Date.now());
   const MIN_LOADING_DURATION_MS = 500;
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent): void => {
-      const message = event.data;
-      if (message.command === 'LOAD_DOCUMENTS') {
+      const message: MessageFromExtensionToWebview = event.data;
+      if (message.command === PreviewMessageType.loadDocuments) {
         const elapsed = Date.now() - loadingStartTimeRef.current;
         const remainingTime = Math.max(0, MIN_LOADING_DURATION_MS - elapsed);
 
@@ -163,7 +162,7 @@ const PreviewApp: React.FC = () => {
           setCurrentPage(1); // Reset to first page when new documents are loaded
           setIsLoading(false);
         }, remainingTime);
-      } else if (message.command === 'REFRESH_ERROR') {
+      } else if (message.command === PreviewMessageType.refreshError) {
         const elapsed = Date.now() - loadingStartTimeRef.current;
         const remainingTime = Math.max(0, MIN_LOADING_DURATION_MS - elapsed);
 
@@ -178,17 +177,17 @@ const PreviewApp: React.FC = () => {
     window.addEventListener('message', handleMessage);
 
     // Request initial documents
-    vscodeApi.postMessage({ command: 'GET_DOCUMENTS' });
+    sendGetDocuments();
 
     return () => {
       window.removeEventListener('message', handleMessage);
     };
-  }, [vscodeApi]);
+  }, []);
 
   const handleRefresh = (): void => {
     loadingStartTimeRef.current = Date.now();
     setIsLoading(true);
-    vscodeApi.postMessage({ command: 'REFRESH_DOCUMENTS' });
+    sendRefreshDocuments();
   };
 
   const handlePrevPage = (): void => {
@@ -208,7 +207,7 @@ const PreviewApp: React.FC = () => {
     setSortOption(newSortOption);
     loadingStartTimeRef.current = Date.now();
     setIsLoading(true);
-    vscodeApi.postMessage({ command: 'SORT_DOCUMENTS', sort: newSortOption });
+    sendSortDocuments(newSortOption);
   };
 
   const handleItemsPerPageChange = (value: string): void => {
