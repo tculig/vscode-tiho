@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import path from 'path';
 import { EJSON } from 'bson';
 import type { Document } from 'bson';
 
@@ -34,11 +33,7 @@ import { PLAYGROUND_RESULT_SCHEME } from './playgroundResultProvider';
 import { StatusView } from '../views';
 import type { TelemetryService } from '../telemetry';
 import type { QueryWithCopilotCodeLensProvider } from './queryWithCopilotCodeLensProvider';
-import {
-  createWebviewPanel,
-  getNonce,
-  getWebviewHtml,
-} from '../utils/webviewHelpers';
+import { createWebviewPanel, getWebviewHtml } from '../utils/webviewHelpers';
 
 const log = createLogger('editors controller');
 
@@ -325,41 +320,22 @@ export default class EditorsController {
 
     try {
       const extensionPath = this._context.extensionPath;
-      const nonce = getNonce();
 
-      const panel = vscode.window.createWebviewPanel(
-        'mongodbPreview',
-        `Preview: ${namespace}`,
-        vscode.ViewColumn.One,
-        {
-          enableScripts: true,
-          retainContextWhenHidden: true,
-          localResourceRoots: [
-            vscode.Uri.file(path.join(extensionPath, 'dist')),
-          ],
-        },
-      );
+      const panel = createWebviewPanel({
+        viewType: 'mongodbPreview',
+        title: `Preview: ${namespace}`,
+        extensionPath,
+      });
 
-      const previewAppUri = panel.webview.asWebviewUri(
-        vscode.Uri.file(path.join(extensionPath, 'dist', 'previewApp.js')),
-      );
+      panel.webview.html = getWebviewHtml({
+        extensionPath,
+        webview: panel.webview,
+        scriptName: 'previewApp.js',
+        title: 'Preview',
+      });
 
-      panel.webview.html = `<!DOCTYPE html>
-        <html lang="en">
-          <head>
-            <meta charset="UTF-8">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none';
-                script-src 'nonce-${nonce}' vscode-resource: 'self' 'unsafe-inline' https:;
-                style-src vscode-resource: 'self' 'unsafe-inline';
-                img-src vscode-resource: 'self'"/>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Preview</title>
-          </head>
-          <body>
-            <div id="root"></div>
-            <script nonce="${nonce}" src="${previewAppUri}"></script>
-          </body>
-        </html>`;
+      panel.onDidDispose(() => this.onPreviewPanelClosed(panel));
+      this._activePreviewPanels.push(panel);
 
       // Keep track of current documents, sort option, and total count
       // Fetch limit is fixed - pagination is handled client-side
