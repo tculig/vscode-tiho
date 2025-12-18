@@ -12,60 +12,32 @@ import {
 } from '@mongodb-js/compass-components';
 
 
-// Typography settings matching compass-components document-list
-const documentTypography = {
-  fontFamily: fontFamilies.code,
-  fontSize: 12,
-  lineHeight: 16,
-};
-
 const documentTreeViewContainerStyles = css({
-  display: 'flex',
-  padding: '0',
-  alignItems: 'flex-start',
-  alignSelf: 'stretch',
-  position: 'relative',
-  width: '100%',
   marginBottom: spacing[200],
 });
 
 const documentContentStyles = css({
-  display: 'flex',
   padding: `${spacing[300]}px ${spacing[400]}px`,
-  flexDirection: 'column',
-  justifyContent: 'flex-start',
-  alignItems: 'flex-start',
-  flex: '1 0 0',
-  position: 'relative',
-  fontFamily: documentTypography.fontFamily,
-  fontSize: `${documentTypography.fontSize}px`,
-  lineHeight: `${documentTypography.lineHeight}px`,
-  width: '100%',
+  fontFamily: fontFamilies.code,
+  fontSize: 12,
+  lineHeight: '16px',
 });
 
 const parentNodeStyles = css({
   display: 'flex',
-  padding: '0',
   flexDirection: 'column',
-  alignItems: 'flex-start',
-  position: 'relative',
-  width: '100%',
 });
 
 const nodeRowStyles = css({
   display: 'flex',
-  alignItems: 'flex-start',
   gap: spacing[100],
-  alignSelf: 'stretch',
-  position: 'relative',
-  minHeight: `${documentTypography.lineHeight}px`,
+  minHeight: 16,
   paddingLeft: spacing[400],
 });
 
 const caretStyles = css({
   width: spacing[400],
-  height: `${documentTypography.lineHeight}px`,
-  position: 'relative',
+  height: 16,
   flexShrink: 0,
   display: 'flex',
   alignItems: 'center',
@@ -92,17 +64,10 @@ const childrenContainerStyles = css({
 
 const keyValueContainerStyles = css({
   display: 'flex',
-  alignItems: 'flex-start',
-  position: 'relative',
   flexWrap: 'wrap',
-  gap: '0',
 });
 
-// Create themed key styles
 const keyStylesBase = css({
-  fontFamily: documentTypography.fontFamily,
-  fontSize: `${documentTypography.fontSize}px`,
-  lineHeight: `${documentTypography.lineHeight}px`,
   fontWeight: 'bold',
   whiteSpace: 'nowrap',
 });
@@ -116,10 +81,6 @@ const keyStylesDark = css({
 });
 
 const dividerStylesBase = css({
-  fontFamily: documentTypography.fontFamily,
-  fontSize: `${documentTypography.fontSize}px`,
-  lineHeight: `${documentTypography.lineHeight}px`,
-  fontWeight: 400,
   userSelect: 'none',
 });
 

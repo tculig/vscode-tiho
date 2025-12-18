@@ -10,7 +10,7 @@ import {
   css,
   spacing,
 } from '@mongodb-js/compass-components';
-import { useDetectVsCodeDarkMode } from './use-detect-vscode-dark-mode';
+import { useDetectVsCodeDarkMode } from '../webview-app/use-detect-vscode-dark-mode';
 import DocumentTreeView from './document-tree-view';
 
 declare const acquireVsCodeApi: () => {
@@ -28,76 +28,55 @@ type ViewType = 'tree' | 'json' | 'table';
 
 const ITEMS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 
-// Styles
 const toolbarStyles = css({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  padding: `${spacing[2]}px ${spacing[3]}px`,
+  padding: `${spacing[200]}px ${spacing[300]}px`,
   borderBottom: '1px solid var(--vscode-panel-border, #444)',
-  gap: spacing[3],
+  gap: spacing[300],
   flexWrap: 'wrap',
-});
-
-const toolbarLeftStyles = css({
-  display: 'flex',
-  alignItems: 'center',
-  gap: spacing[2],
-});
-
-const toolbarRightStyles = css({
-  display: 'flex',
-  alignItems: 'center',
-  gap: spacing[3],
 });
 
 const toolbarGroupStyles = css({
   display: 'flex',
   alignItems: 'center',
-  gap: spacing[2],
+  gap: spacing[200],
+});
+
+const toolbarGroupWideStyles = css({
+  display: 'flex',
+  alignItems: 'center',
+  gap: spacing[300],
 });
 
 const toolbarLabelStyles = css({
-  fontSize: '13px',
+  fontSize: 13,
   fontWeight: 500,
 });
 
 const paginationInfoStyles = css({
-  fontSize: '13px',
+  fontSize: 13,
   whiteSpace: 'nowrap',
 });
 
 const selectWrapperStyles = css({
-  // Style the select button to fit content width
   '& button': {
     width: 'auto',
     minWidth: 'unset',
   },
-});
-
-const narrowSelectStyles = css({
-  // Style the select button to fit content width
-  '& button': {
-    width: 'auto',
-    minWidth: 'unset',
-  },
-});
-
-const settingsMenuStyles = css({
-  position: 'relative',
 });
 
 const refreshButtonStyles = css({
   display: 'flex',
   alignItems: 'center',
-  gap: '4px',
+  gap: spacing[100],
   background: 'none',
   border: 'none',
-  color: 'inherit',
   cursor: 'pointer',
-  padding: '4px 8px',
-  borderRadius: '4px',
-  fontSize: '13px',
+  padding: `${spacing[100]}px ${spacing[200]}px`,
+  borderRadius: spacing[100],
+  fontSize: 13,
   fontWeight: 500,
   '&:hover': {
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -107,7 +86,6 @@ const refreshButtonStyles = css({
 const paginationArrowsStyles = css({
   display: 'flex',
   alignItems: 'center',
-  gap: '0',
 });
 
 const spinnerKeyframes = `
@@ -121,14 +99,13 @@ const loadingOverlayStyles = css({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  padding: '32px',
+  padding: spacing[600],
   flexDirection: 'column',
-  gap: '12px',
+  gap: spacing[300],
 });
 
 const spinnerStyles = css({
   animation: 'spin 1s linear infinite',
-  display: 'inline-block',
 });
 
 const PreviewApp: React.FC = () => {
@@ -261,7 +238,7 @@ const PreviewApp: React.FC = () => {
         {/* Toolbar */}
         <div className={toolbarStyles}>
           {/* Left side - Insert Document */}
-          <div className={toolbarLeftStyles}>
+          <div className={toolbarGroupStyles}>
             <IconButton
               aria-label="Insert Document"
               title="Insert Document"
@@ -275,7 +252,7 @@ const PreviewApp: React.FC = () => {
           </div>
 
           {/* Right side - Actions */}
-          <div className={toolbarRightStyles}>
+          <div className={toolbarGroupWideStyles}>
             {/* Refresh - single button with icon and text */}
             <button
               className={refreshButtonStyles}
@@ -308,7 +285,7 @@ const PreviewApp: React.FC = () => {
             </div>
 
             {/* Items per page */}
-            <div className={narrowSelectStyles}>
+            <div className={selectWrapperStyles}>
               <Select
                 aria-label="Items per page"
                 value={itemsPerPage.toString()}
@@ -367,26 +344,24 @@ const PreviewApp: React.FC = () => {
             </div>
 
             {/* Settings dropdown */}
-            <div className={settingsMenuStyles}>
-              <Menu
-                open={settingsMenuOpen}
-                setOpen={setSettingsMenuOpen}
-                trigger={
-                  <IconButton
-                    aria-label="Settings"
-                    title="Settings"
-                    onClick={toggleSettingsMenu}
-                  >
-                    <Icon glyph="Settings" />
-                  </IconButton>
-                }
-              >
-                <MenuItem>Show line numbers</MenuItem>
-                <MenuItem>Expand all</MenuItem>
-                <MenuItem>Collapse all</MenuItem>
-                <MenuItem>Copy documents</MenuItem>
-              </Menu>
-            </div>
+            <Menu
+              open={settingsMenuOpen}
+              setOpen={setSettingsMenuOpen}
+              trigger={
+                <IconButton
+                  aria-label="Settings"
+                  title="Settings"
+                  onClick={toggleSettingsMenu}
+                >
+                  <Icon glyph="Settings" />
+                </IconButton>
+              }
+            >
+              <MenuItem>Show line numbers</MenuItem>
+              <MenuItem>Expand all</MenuItem>
+              <MenuItem>Collapse all</MenuItem>
+              <MenuItem>Copy documents</MenuItem>
+            </Menu>
           </div>
         </div>
 
