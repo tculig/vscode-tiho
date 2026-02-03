@@ -27,6 +27,7 @@ import {
   currentPageAdjusted,
 } from './store/documentQuerySlice';
 import { setupMessageHandler } from './store/messageHandler';
+import MonacoViewer from './monaco-viewer';
 
 const ITEMS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
 
@@ -264,10 +265,11 @@ const PreviewApp: React.FC = () => {
           </div>
         ) : (
           <>
-            {displayedDocuments.map((doc, index) => (
-              <pre key={`${currentPage}-${index}`}>
-                {JSON.stringify(doc, null, 2)}
-              </pre>
+            {displayedDocuments.map((document, index) => (
+              <MonacoViewer
+                document={document}
+                key={`${currentPage}-${index}`}
+              />
             ))}
             {displayedDocuments.length === 0 && !getDocumentsError && (
               <div className={emptyStateStyles}>No documents to display</div>
