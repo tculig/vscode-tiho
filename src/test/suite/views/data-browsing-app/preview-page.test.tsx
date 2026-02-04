@@ -378,7 +378,7 @@ describe('PreviewApp test suite', function () {
       });
 
       // Should render the document content
-      expect(screen.getByText(/"_id":\s*"123"/)).to.exist;
+	  	expect(screen.getByText(/_id:\s*"123"/)).to.exist;
     });
 
     it('should render multiple documents', function () {
@@ -399,8 +399,8 @@ describe('PreviewApp test suite', function () {
       });
 
       // Both documents should be rendered
-      expect(screen.getByText(/"_id":\s*"1"/)).to.exist;
-      expect(screen.getByText(/"_id":\s*"2"/)).to.exist;
+	  	expect(screen.getByText(/_id:\s*"1"/)).to.exist;
+	  	expect(screen.getByText(/_id:\s*"2"/)).to.exist;
     });
   });
 
@@ -433,9 +433,9 @@ describe('PreviewApp test suite', function () {
       });
 
       // Should show the new document
-      expect(screen.getByText(/"_id":\s*"11"/)).to.exist;
+	  	expect(screen.getByText(/_id:\s*"11"/)).to.exist;
       // Should not show the old document
-      expect(screen.queryByText(/"_id":\s*"1"/)).to.be.null;
+	  	expect(screen.queryByText(/_id:\s*"1"/)).to.be.null;
     });
   });
 });

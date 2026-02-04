@@ -3,6 +3,9 @@ import chai from 'chai';
 import sinonChai from 'sinon-chai';
 chai.use(sinonChai);
 
+import Module from 'module';
+import React from 'react';
+
 // JSDom
 import { JSDOM, VirtualConsole } from 'jsdom';
 
@@ -134,4 +137,47 @@ Object.assign(global, { TextDecoder, TextEncoder });
 
 (global as any).acquireVsCodeApi = (): any => {
   return (global as any).vscodeFake;
+};
+
+// --- Test stubs ---
+// Monaco does not reliably render its text content in jsdom, which makes RTL assertions flaky.
+// For webview component tests we replace `@monaco-editor/react` with a lightweight stub that
+// simply renders the provided `value` into the DOM.
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const _originalRequire = Module.prototype.require;
+Module.prototype.require = function (id: string): any {
+  if (id === '@monaco-editor/react') {
+    const MockEditor = (props: any): React.ReactElement => {
+      React.useEffect(() => {
+        props?.onMount?.(
+          {
+            addCommand: () => 0,
+            onContextMenu: () => ({ dispose: () => undefined }),
+            setHiddenAreas: () => undefined,
+          },
+        );
+        // We only need onMount side-effects; nothing else.
+      }, []);
+
+      const value: string = typeof props?.value === 'string' ? props.value : '';
+      // Our MonacoViewer uses a hidden prologue line (`const doc =`).
+      // The user doesn't see it in production, so we strip it in tests.
+      const visibleValue = value.replace(/^const doc =\n/, '');
+
+      return React.createElement(
+        'pre',
+        { 'data-testid': 'mock-monaco-editor' },
+        visibleValue,
+      );
+    };
+
+    return {
+      __esModule: true,
+      default: MockEditor,
+      useMonaco: () => undefined,
+    };
+  }
+
+  // eslint-disable-next-line prefer-rest-params
+  return _originalRequire.apply(this, arguments as any);
 };

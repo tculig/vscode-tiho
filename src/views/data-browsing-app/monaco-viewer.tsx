@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import type { editor } from 'monaco-editor';
@@ -144,7 +144,7 @@ const viewerOptions: Monaco.editor.IStandaloneEditorConstructionOptions = {
   minimap: { enabled: false },
   glyphMargin: false,
   folding: true,
-  foldingStrategy: 'auto', // We'll use a custom folding provider
+  foldingStrategy: 'indentation', // Better folding for object/array structures
   showFoldingControls: 'always',
   lineDecorationsWidth: 0,
   lineNumbersMinChars: 0,
@@ -164,7 +164,7 @@ const viewerOptions: Monaco.editor.IStandaloneEditorConstructionOptions = {
   lineNumbers: 'off',
   cursorStyle: 'line',
   occurrencesHighlight: 'off',
-  selectionHighlight: false,
+  selectionHighlight: true,
   renderValidationDecorations: 'off',
   lineHeight: LINE_HEIGHT,
   fontFamily: 'var(--vscode-editor-font-family, "Consolas", "Courier New", monospace)',
@@ -236,76 +236,71 @@ function truncateLongValues(obj: any): any {
 
 /**
  * Format a string value, handling multi-line strings with proper indentation
- * Multi-line strings are displayed with continuation lines indented
+ * Multi-line strings use template literals (backticks) for proper JS syntax highlighting
  */
 function formatStringValue(str: string, indent: number): string {
-  // Escape backslashes and quotes
-  const escaped = str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\t/g, '\\t');
+  // Check if string contains newlines - use template literals for multi-line
+  if (str.includes('\n') || str.includes('\r')) {
+    // For template literals, escape backticks and ${
+    const escaped = str.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
 
-  // Check if string contains newlines
-  if (!escaped.includes('\n') && !escaped.includes('\r')) {
-    return `"${escaped}"`;
+    // Multi-line string: format with continuation lines indented
+    const continuationIndent = '  '.repeat(indent) + '   ';
+    const lines = escaped.split(/\r?\n/);
+
+    const formattedLines = lines.map((line, index) => {
+      if (index === 0) {
+        return '`' + line;
+      }
+      return `${continuationIndent}${line}`;
+    });
+
+    return formattedLines.join('\n') + '`';
   }
 
-  // Multi-line string: format with continuation lines indented
-  const continuationIndent = '  '.repeat(indent) + '   ';
-  const lines = escaped.split(/\r?\n/);
-
-  const formattedLines = lines.map((line, index) => {
-    if (index === 0) {
-      return `"${line}`;
-    }
-    return `${continuationIndent}${line}`;
-  });
-
-  return formattedLines.join('\n') + '"';
+  // Single-line string: use double quotes
+  const escaped = str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\t/g, '\\t');
+  return `"${escaped}"`;
 }
 
 /**
- * Format JSON with unquoted keys (similar to JavaScript object notation)
+ * Format JSON-like data into JavaScript object notation (unquoted keys).
+ * Note: root-level tokenization quirks are handled separately by the editor prologue.
  */
-function formatJsonWithUnquotedKeys(obj: any, indent = 0, isRoot = false): string {
+/**
+ * Format JSON-like data into valid JavaScript object literal syntax.
+ * Forces unquoted keys to ensure the 'property' token is used for highlighting.
+ */
+function formatJsonWithUnquotedKeys(obj: any, indent = 0): string {
   const indentStr = '  '.repeat(indent);
   const nextIndentStr = '  '.repeat(indent + 1);
 
-  if (obj === null) {
-    return 'null';
-  }
-
-  if (obj === undefined) {
-    return 'undefined';
-  }
+  if (obj === null) return 'null';
+  if (obj === undefined) return 'undefined';
+  if (typeof obj === 'number' || typeof obj === 'boolean') return String(obj);
 
   if (typeof obj === 'string') {
     return formatStringValue(obj, indent);
   }
 
-  if (typeof obj === 'number' || typeof obj === 'boolean') {
-    return String(obj);
-  }
-
   if (Array.isArray(obj)) {
-    if (obj.length === 0) {
-      return '[]';
-    }
-    const items = obj.map(item => `${nextIndentStr}${formatJsonWithUnquotedKeys(item, indent + 1, false)}`);
+    if (obj.length === 0) return '[]';
+    const items = obj.map(item =>
+      `${nextIndentStr}${formatJsonWithUnquotedKeys(item, indent + 1)}`
+    );
     return `[\n${items.join(',\n')}\n${indentStr}]`;
   }
 
   if (typeof obj === 'object') {
     const keys = Object.keys(obj);
-    if (keys.length === 0) {
-      return isRoot ? '' : '{}';
-    }
+    if (keys.length === 0) return '{}';
+
     const items = keys.map(key => {
-      const value = formatJsonWithUnquotedKeys(obj[key], indent + 1, false);
+      const value = formatJsonWithUnquotedKeys(obj[key], indent + 1);
+      // Ensure key is a valid JS identifier; if not, you might need
+      // quotes, but for MongoDB/standard docs, unquoted is usually fine.
       return `${nextIndentStr}${key}: ${value}`;
     });
-
-    // For root object, don't include outer braces
-    if (isRoot) {
-      return items.join(',\n');
-    }
 
     return `{\n${items.join(',\n')}\n${indentStr}}`;
   }
@@ -318,70 +313,63 @@ const MonacoViewer: React.FC<MonacoViewerProps> = ({ document, truncateValues = 
   const [showAllFields, setShowAllFields] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
-  // Define custom theme, language, and folding provider when Monaco is ready
+  // We keep a reference to the editor so we can re-apply view settings when content changes.
+  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+
+  // Define custom theme and folding provider when Monaco is ready
+  // Uses JavaScript language for syntax highlighting (like VS Code playgrounds)
   useEffect(() => {
     if (monaco) {
-      // Register custom language for our JSON-like format
-      monaco.languages.register({ id: 'mongodb-document' });
+      // Detect VS Code theme type by checking body classes
+      // VS Code adds these classes based on the active theme kind
+      let themeBase: 'vs' | 'vs-dark' | 'hc-black' | 'hc-light' = 'vs-dark';
+      const bodyClassList = globalThis.document.body.classList;
 
-      // Define tokenizer that handles multi-line strings
-      monaco.languages.setMonarchTokensProvider('mongodb-document', {
-        defaultToken: '',
-        tokenPostfix: '.mongodb',
+      if (bodyClassList.contains('vscode-high-contrast-light')) {
+        themeBase = 'hc-light';
+      } else if (bodyClassList.contains('vscode-high-contrast')) {
+        themeBase = 'hc-black';
+      } else if (bodyClassList.contains('vscode-light')) {
+        themeBase = 'vs';
+      } else if (bodyClassList.contains('vscode-dark')) {
+        themeBase = 'vs-dark';
+      }
 
-        keywords: ['true', 'false', 'null', 'undefined'],
+      // Define a transparent background theme that inherits VS Code's JavaScript highlighting
+    monaco.editor.defineTheme('mongoTheme', {
+      base: themeBase,
+      inherit: true,
+      rules: [
+        // Object keys should be blue (like VS Code's default for JS object properties)
+        { token: 'key', foreground: '9CDCFE' },
+        { token: 'key.identifier', foreground: '9CDCFE' },
+        { token: 'property', foreground: '9CDCFE' },
+        { token: 'identifier.key', foreground: '9CDCFE' },
+        { token: 'variable.other.property', foreground: '9CDCFE' },
+        { token: 'variable.other.object.property', foreground: '9CDCFE' },
+        { token: 'meta.object-literal.key', foreground: '9CDCFE' },
+        { token: 'support.type.property-name', foreground: '9CDCFE' },
+        { token: 'entity.name.tag', foreground: '9CDCFE' },
+        // Identifiers in general (this might be what's catching the keys)
+        { token: 'identifier', foreground: '9CDCFE' },
+        { token: 'variable', foreground: '9CDCFE' },
+        { token: 'variable.other', foreground: '9CDCFE' },
+        { token: 'variable.other.readwrite', foreground: '9CDCFE' },
+        { token: 'variable.other.constant', foreground: '9CDCFE' },
+        // This ensures strings inside the object stay the standard string color
+        { token: 'string', foreground: 'CE9178' },
+        { token: 'string.quoted', foreground: 'CE9178' },
+        { token: 'string.quoted.double', foreground: 'CE9178' },
+        { token: 'string.quoted.single', foreground: 'CE9178' },
+      ],
+      colors: {
+        'editor.background': '#00000000',
+        'editorGutter.background': '#00000000',
+      },
+    });
 
-        tokenizer: {
-          root: [
-            // Whitespace
-            [/\s+/, 'white'],
-            // Property keys (unquoted identifiers followed by colon)
-            [/[a-zA-Z_$][\w$]*(?=\s*:)/, 'variable'],
-            // Colon
-            [/:/, 'delimiter'],
-            // Comma
-            [/,/, 'delimiter'],
-            // Brackets
-            [/[{}[\]]/, '@brackets'],
-            // Numbers
-            [/-?\d+\.?\d*([eE][+-]?\d+)?/, 'number'],
-            // Keywords
-            [/\b(true|false|null|undefined)\b/, 'keyword'],
-            // Strings - start with quote, may be multi-line
-            [/"/, { token: 'string.quote', next: '@string' }],
-          ],
-          string: [
-            // End of string
-            [/"/, { token: 'string.quote', next: '@pop' }],
-            // Escaped characters
-            [/\\[\\/"bfnrt]/, 'string.escape'],
-            // Any other character in string (including newlines handled by continuation)
-            [/[^"\\]+/, 'string'],
-            // Backslash not followed by escape char
-            [/\\/, 'string'],
-          ],
-        },
-      });
-
-      monaco.editor.defineTheme('mongoTheme', {
-        base: 'vs-dark',
-        inherit: true,
-        rules: [
-          { token: 'variable.mongodb', foreground: '9CDCFE' },
-          { token: 'string.mongodb', foreground: 'CE9178' },
-          { token: 'string.quote.mongodb', foreground: 'CE9178' },
-          { token: 'string.escape.mongodb', foreground: 'D7BA7D' },
-          { token: 'number.mongodb', foreground: 'B5CEA8' },
-          { token: 'keyword.mongodb', foreground: '569CD6' },
-        ],
-        colors: {
-          'editor.background': '#00000000',
-          'editorGutter.background': '#00000000',
-        },
-      });
-
-      // Register custom folding provider that only folds objects and arrays
-      const foldingProvider = monaco.languages.registerFoldingRangeProvider('mongodb-document', {
+      // Register custom folding provider for JavaScript that folds objects and arrays
+      const foldingProvider = monaco.languages.registerFoldingRangeProvider('javascript', {
         provideFoldingRanges: (model) => {
           const ranges: Monaco.languages.FoldingRange[] = [];
           const lines = model.getLinesContent();
@@ -389,7 +377,7 @@ const MonacoViewer: React.FC<MonacoViewerProps> = ({ document, truncateValues = 
 
           for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
-            const trimmed = line.trim(); // Trim both ends
+            const trimmed = line.trim();
 
             // Check for opening braces/brackets at end of line
             if (trimmed.endsWith('{') || trimmed.endsWith('[')) {
@@ -442,20 +430,46 @@ const MonacoViewer: React.FC<MonacoViewerProps> = ({ document, truncateValues = 
     return sliceDocumentFields(document, MAX_INITIAL_FIELDS);
   }, [document, hasMoreFields, showAllFields]);
 
-  const jsonValue = useMemo(() => {
-    const docToFormat = truncateValues ? truncateLongValues(displayDocument) : displayDocument;
-    return formatJsonWithUnquotedKeys(docToFormat, 0, true);
+  const formattedDocument = useMemo(() => {
+    const docToFormat = truncateValues
+      ? truncateLongValues(displayDocument)
+      : displayDocument;
+    return formatJsonWithUnquotedKeys(docToFormat);
   }, [displayDocument, truncateValues]);
+
 
   // Calculate editor height based on content
   const editorHeight = useMemo(() => {
-    const lineCount = jsonValue.split('\n').length;
+    // The first line of `jsonValue` is a hidden prologue; size based on what is actually shown.
+    const lineCount = formattedDocument.split('\n').length;
     const contentHeight = lineCount * LINE_HEIGHT + EDITOR_PADDING * 2;
     return Math.min(contentHeight, MAX_EDITOR_HEIGHT);
-  }, [jsonValue]);
+  }, [formattedDocument]);
+
+const jsonValue = useMemo(() => {
+  // We trim the formatted document to avoid double-wrapping braces
+  // and put the first brace on the hidden prologue line.
+  return formattedDocument;
+}, [formattedDocument]);
+
+const hidePrologueLine = useCallback(() => {
+  if (!monaco || !editorRef.current) return;
+
+  const editorInstance: any = editorRef.current;
+
+  // We hide only the very first line "const doc = {"
+  // This leaves the rest of the object visible and correctly tokenized.
+  if (typeof editorInstance.setHiddenAreas === 'function') {
+    editorInstance.setHiddenAreas([
+      new monaco.Range(1, 1, 1, 1),
+    ]);
+  }
+}, [monaco]);
 
   // Disable find widget when editor mounts
   const handleEditorMount = useCallback((editorInstance: editor.IStandaloneCodeEditor) => {
+    editorRef.current = editorInstance;
+
     // Disable the find widget command
     editorInstance.addCommand(
       monaco?.KeyMod.CtrlCmd! | monaco?.KeyCode.KeyF!,
@@ -475,7 +489,16 @@ const MonacoViewer: React.FC<MonacoViewerProps> = ({ document, truncateValues = 
 
       setContextMenu({ x, y });
     });
-  }, [monaco]);
+
+    // Ensure the prologue is hidden on initial mount.
+    // Defer to next tick so the model/layout is ready.
+    setTimeout(() => hidePrologueLine(), 0);
+  }, [monaco, hidePrologueLine]);
+
+  // Re-apply hidden prologue when the document changes (e.g., Show more/less).
+  useEffect(() => {
+    setTimeout(() => hidePrologueLine(), 0);
+  }, [jsonValue, hidePrologueLine]);
 
   // Close context menu when clicking outside
   useEffect(() => {
@@ -496,7 +519,7 @@ const MonacoViewer: React.FC<MonacoViewerProps> = ({ document, truncateValues = 
       <div className={monacoWrapperStyles}>
         <Editor
           height={editorHeight}
-          defaultLanguage="mongodb-document"
+          defaultLanguage="typescript"
           value={jsonValue}
           theme="mongoTheme"
           options={viewerOptions}
