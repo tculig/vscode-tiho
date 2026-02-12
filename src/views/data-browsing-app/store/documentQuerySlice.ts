@@ -1,18 +1,41 @@
 import type { PayloadAction } from '@reduxjs/toolkit';
-import { createSlice } from '@reduxjs/toolkit';
+import { createSlice, current } from '@reduxjs/toolkit';
 import {
   sendGetDocuments,
   sendGetTotalCount,
   sendCancelRequest,
 } from '../vscode-api';
-import type {
-  TokenColors,
-  MonacoBaseTheme,
+import {
+  SORT_VALUE_MAP,
+  type TokenColors,
+  type MonacoBaseTheme,
+  type DocumentSort,
+  type SortValueKey,
 } from '../extension-app-message-constants';
 
 export interface PreviewDocument {
   [key: string]: unknown;
 }
+
+export interface SortOption {
+  label: string;
+  value: string;
+  sort: DocumentSort | null;
+}
+
+const SORT_LABELS: Record<string, string> = Object.assign(Object.create(null), {
+  default: 'Default',
+  _id_asc: '_id: 1',
+  _id_desc: '_id: -1',
+});
+
+export const SORT_OPTIONS: SortOption[] = Object.entries(SORT_VALUE_MAP).map(
+  ([key, sort]) => ({
+    label: SORT_LABELS[key],
+    value: key,
+    sort: sort ?? null,
+  }),
+);
 
 export type ErrorType = 'getDocuments' | 'getTotalCount';
 
@@ -25,6 +48,7 @@ export interface DocumentQueryState {
   displayedDocuments: PreviewDocument[];
   currentPage: number;
   itemsPerPage: number;
+  sort: SortOption | null;
   isLoading: boolean;
   totalCountInCollection: number | null;
   hasReceivedCount: boolean;
@@ -58,10 +82,23 @@ const recalculatePaginationValues = (state: DocumentQueryState): void => {
   );
 };
 
+export const getInitialSort = (): SortOption | null => {
+  if (
+    typeof window !== 'undefined' &&
+    window.MDB_DATA_BROWSING_OPTIONS?.defaultSortOrder
+  ) {
+    const key = window.MDB_DATA_BROWSING_OPTIONS
+      .defaultSortOrder as SortValueKey;
+    return SORT_OPTIONS.find((opt) => opt.value === key) ?? null;
+  }
+  return null;
+};
+
 export const initialState: DocumentQueryState = {
   displayedDocuments: [],
   currentPage: 1,
   itemsPerPage: DEFAULT_ITEMS_PER_PAGE,
+  sort: getInitialSort(),
   isLoading: true,
   totalCountInCollection: null,
   hasReceivedCount: false,
@@ -87,13 +124,23 @@ const documentQuerySlice = createSlice({
       state.errors.getDocuments = null;
       state.errors.getTotalCount = null;
       recalculatePaginationValues(state);
-      sendGetDocuments(0, state.itemsPerPage);
+      const currentState = current(state);
+      sendGetDocuments({
+        skip: 0,
+        limit: currentState.itemsPerPage,
+        sort: currentState.sort,
+      });
       sendGetTotalCount();
     },
     initialDocumentsFetchRequested: (state) => {
       state.errors.getDocuments = null;
       state.errors.getTotalCount = null;
-      sendGetDocuments(0, state.itemsPerPage);
+      const currentState = current(state);
+      sendGetDocuments({
+        skip: 0,
+        limit: currentState.itemsPerPage,
+        sort: currentState.sort,
+      });
       sendGetTotalCount();
     },
     previousPageRequested: (state) => {
@@ -104,7 +151,12 @@ const documentQuerySlice = createSlice({
         state.isLoading = true;
         state.errors.getDocuments = null;
         recalculatePaginationValues(state);
-        sendGetDocuments(skip, state.itemsPerPage);
+        const currentState = current(state);
+        sendGetDocuments({
+          skip,
+          limit: currentState.itemsPerPage,
+          sort: currentState.sort,
+        });
       }
     },
     nextPageRequested: (state) => {
@@ -115,7 +167,12 @@ const documentQuerySlice = createSlice({
         state.isLoading = true;
         state.errors.getDocuments = null;
         recalculatePaginationValues(state);
-        sendGetDocuments(skip, state.itemsPerPage);
+        const currentState = current(state);
+        sendGetDocuments({
+          skip,
+          limit: currentState.itemsPerPage,
+          sort: currentState.sort,
+        });
       }
     },
     itemsPerPageChanged: (state, action: PayloadAction<number>) => {
@@ -125,7 +182,25 @@ const documentQuerySlice = createSlice({
       state.isLoading = true;
       state.errors.getDocuments = null;
       recalculatePaginationValues(state);
-      sendGetDocuments(0, newItemsPerPage);
+      const currentState = current(state);
+      sendGetDocuments({
+        skip: 0,
+        limit: newItemsPerPage,
+        sort: currentState.sort,
+      });
+    },
+    sortChanged: (state, action: PayloadAction<SortOption | null>) => {
+      state.sort = action.payload;
+      state.currentPage = 1;
+      state.isLoading = true;
+      state.errors.getDocuments = null;
+      recalculatePaginationValues(state);
+      const currentState = current(state);
+      sendGetDocuments({
+        skip: 0,
+        limit: currentState.itemsPerPage,
+        sort: action.payload,
+      });
     },
     requestCancellationRequested: (state) => {
       state.isLoading = false;
@@ -183,6 +258,7 @@ export const {
   previousPageRequested,
   nextPageRequested,
   itemsPerPageChanged,
+  sortChanged,
   requestCancellationRequested,
   currentPageAdjusted,
   documentsReceived,

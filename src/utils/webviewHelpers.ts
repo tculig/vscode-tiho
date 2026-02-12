@@ -37,8 +37,6 @@ export interface WebviewHtmlOptions {
   webviewType: WebviewType;
   title?: string;
   additionalHeadContent?: string;
-  codiconStylesheetUri?: string;
-  monacoEditorBaseUri?: string;
 }
 
 export const getWebviewHtml = ({
@@ -47,8 +45,6 @@ export const getWebviewHtml = ({
   webviewType,
   title = 'MongoDB',
   additionalHeadContent = '',
-  codiconStylesheetUri,
-  monacoEditorBaseUri,
 }: WebviewHtmlOptions): string => {
   const nonce = getNonce();
   const scriptUri = getWebviewUri(
@@ -58,14 +54,6 @@ export const getWebviewHtml = ({
     'webviewApp.js',
   );
 
-  const codiconLink = codiconStylesheetUri
-    ? `<link id="vscode-codicon-stylesheet" rel="stylesheet" href="${codiconStylesheetUri}" nonce="${nonce}">`
-    : '';
-
-  const monacoScript = monacoEditorBaseUri
-    ? `<script nonce="${nonce}">window.MONACO_EDITOR_BASE_URI = '${monacoEditorBaseUri}';</script>`
-    : '';
-
   return `<!DOCTYPE html>
   <html lang="en">
     <head>
@@ -74,11 +62,11 @@ export const getWebviewHtml = ({
           script-src 'nonce-${nonce}' vscode-resource: 'self' 'unsafe-inline' https:;
           style-src vscode-resource: 'self' 'unsafe-inline';
           font-src vscode-resource: 'self' data:;
-          img-src vscode-resource: 'self'"/>
+          img-src vscode-resource: 'self';
+          connect-src vscode-resource: 'self' https:;
+          worker-src vscode-resource: 'self' blob:;"/>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${title}</title>
-      ${codiconLink}
-      ${monacoScript}
     </head>
     <body>
       <div id="root"></div>

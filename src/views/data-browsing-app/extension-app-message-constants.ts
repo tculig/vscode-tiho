@@ -1,9 +1,23 @@
+export interface DataBrowsingVscodeOptions {
+  monacoEditorBaseUri?: string;
+  defaultSortOrder?: string;
+}
+
+declare global {
+  interface Window {
+    MDB_DATA_BROWSING_OPTIONS?: DataBrowsingVscodeOptions;
+  }
+}
+
 export const PreviewMessageType = {
   // Messages from webview to extension
   getDocuments: 'GET_DOCUMENTS',
   getTotalCount: 'GET_TOTAL_COUNT',
   cancelRequest: 'CANCEL_REQUEST',
   getThemeColors: 'GET_THEME_COLORS',
+  editDocument: 'EDIT_DOCUMENT',
+  cloneDocument: 'CLONE_DOCUMENT',
+  deleteDocument: 'DELETE_DOCUMENT',
 
   // Messages from extension to webview
   loadPage: 'LOAD_PAGE',
@@ -12,6 +26,7 @@ export const PreviewMessageType = {
   updateTotalCount: 'UPDATE_TOTAL_COUNT',
   updateTotalCountError: 'UPDATE_TOTAL_COUNT_ERROR',
   updateThemeColors: 'UPDATE_THEME_COLORS',
+  documentDeleted: 'DOCUMENT_DELETED',
 } as const;
 
 export interface TokenColors {
@@ -35,10 +50,21 @@ interface BasicWebviewMessage {
   command: string;
 }
 
+export type DocumentSort = Record<string, 1 | -1>;
+
+export const SORT_VALUE_MAP = {
+  default: undefined,
+  _id_asc: { _id: 1 } as DocumentSort,
+  _id_desc: { _id: -1 } as DocumentSort,
+} as const;
+
+export type SortValueKey = keyof typeof SORT_VALUE_MAP;
+
 export interface GetDocumentsMessage extends BasicWebviewMessage {
   command: typeof PreviewMessageType.getDocuments;
   skip: number;
   limit: number;
+  sort?: DocumentSort;
 }
 
 export interface CancelRequestMessage extends BasicWebviewMessage {
@@ -51,6 +77,21 @@ export interface GetTotalCountMessage extends BasicWebviewMessage {
 
 export interface GetThemeColorsMessage extends BasicWebviewMessage {
   command: typeof PreviewMessageType.getThemeColors;
+}
+
+export interface EditDocumentMessage extends BasicWebviewMessage {
+  command: typeof PreviewMessageType.editDocument;
+  documentId: any;
+}
+
+export interface CloneDocumentMessage extends BasicWebviewMessage {
+  command: typeof PreviewMessageType.cloneDocument;
+  document: Record<string, unknown>;
+}
+
+export interface DeleteDocumentMessage extends BasicWebviewMessage {
+  command: typeof PreviewMessageType.deleteDocument;
+  documentId: any;
 }
 
 // Messages from extension to webview
@@ -84,11 +125,18 @@ export interface UpdateThemeColorsMessage extends BasicWebviewMessage {
   themeKind: MonacoBaseTheme;
 }
 
+export interface DocumentDeletedMessage extends BasicWebviewMessage {
+  command: typeof PreviewMessageType.documentDeleted;
+}
+
 export type MessageFromWebviewToExtension =
   | GetDocumentsMessage
   | GetTotalCountMessage
   | CancelRequestMessage
-  | GetThemeColorsMessage;
+  | GetThemeColorsMessage
+  | EditDocumentMessage
+  | CloneDocumentMessage
+  | DeleteDocumentMessage;
 
 export type MessageFromExtensionToWebview =
   | LoadPageMessage
@@ -96,4 +144,5 @@ export type MessageFromExtensionToWebview =
   | RequestCancelledMessage
   | UpdateTotalCountMessage
   | UpdateTotalCountErrorMessage
-  | UpdateThemeColorsMessage;
+  | UpdateThemeColorsMessage
+  | DocumentDeletedMessage;

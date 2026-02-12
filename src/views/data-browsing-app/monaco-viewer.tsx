@@ -15,18 +15,20 @@ import type {
 } from './extension-app-message-constants';
 import { toJSString } from 'mongodb-query-parser';
 import { EJSON } from 'bson';
+import {
+  sendEditDocument,
+  sendCloneDocument,
+  sendDeleteDocument,
+} from './vscode-api';
 
 // Configure Monaco Editor loader to use local files instead of CDN
-declare global {
-  interface Window {
-    MONACO_EDITOR_BASE_URI?: string;
-  }
-}
-
-if (typeof window !== 'undefined' && window.MONACO_EDITOR_BASE_URI) {
+if (
+  typeof window !== 'undefined' &&
+  window.MDB_DATA_BROWSING_OPTIONS?.monacoEditorBaseUri
+) {
   loader.config({
     paths: {
-      vs: `${window.MONACO_EDITOR_BASE_URI}/vs`,
+      vs: `${window.MDB_DATA_BROWSING_OPTIONS.monacoEditorBaseUri}/vs`,
     },
   });
 }
@@ -75,6 +77,7 @@ const monacoWrapperStyles = css({
 });
 
 const cardStyles = css({
+  position: 'relative',
   backgroundColor:
     'var(--vscode-editorWidget-background, var(--vscode-editor-background))',
   border:
@@ -82,6 +85,49 @@ const cardStyles = css({
   borderRadius: '6px',
   marginBottom: spacing[200],
   padding: spacing[300],
+
+  '.action-bar': {
+    position: 'absolute',
+    top: spacing[200],
+    right: spacing[200],
+    display: 'flex',
+    gap: spacing[100],
+    zIndex: 1000,
+
+    opacity: 0,
+    transition: 'opacity 0.2s',
+  },
+
+  '&:hover .action-bar': {
+    opacity: 1,
+  },
+
+  '&:focus-within .action-bar': {
+    opacity: 1,
+  },
+});
+
+const actionButtonStyles = css({
+  background: 'var(--vscode-button-background)',
+  border: '1px solid var(--vscode-button-border, transparent)',
+  color: 'var(--vscode-button-foreground)',
+  borderRadius: '4px',
+  padding: `${spacing[100]}px ${spacing[200]}px`,
+  cursor: 'pointer',
+  fontSize: '12px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minWidth: '24px',
+  minHeight: '24px',
+
+  '&:hover': {
+    background: 'var(--vscode-button-hoverBackground)',
+  },
+
+  '&:active': {
+    background: 'var(--vscode-button-background)',
+  },
 });
 
 const viewerOptions: Monaco.editor.IStandaloneEditorConstructionOptions = {
@@ -125,6 +171,10 @@ const viewerOptions: Monaco.editor.IStandaloneEditorConstructionOptions = {
     autoFindInSelection: 'never',
     seedSearchStringFromSelection: 'never',
   },
+  quickSuggestions: false,
+  suggestOnTriggerCharacters: false,
+  parameterHints: { enabled: false },
+  hover: { enabled: false },
 };
 
 const MonacoViewer: React.FC<MonacoViewerProps> = ({
@@ -156,31 +206,45 @@ const MonacoViewer: React.FC<MonacoViewerProps> = ({
   }, [themeColors]);
 
   useEffect(() => {
-    if (monaco) {
-      monaco.editor.defineTheme('currentVSCodeTheme', {
-        base: themeKind,
-        inherit: true,
-        rules: colors
-          ? ([
-              { token: 'identifier', foreground: colors.key },
-              { token: 'variable', foreground: colors.key },
-              { token: 'variable.name', foreground: colors.key },
-              { token: 'string', foreground: colors.string },
-              { token: 'string.quote', foreground: colors.string },
-              { token: 'string.escape', foreground: colors.string },
-              { token: 'number', foreground: colors.number },
-              { token: 'keyword', foreground: colors.punctuation },
-              { token: 'type', foreground: colors.type },
-              { token: 'comment', foreground: colors.comment },
-              { token: 'delimiter', foreground: colors.punctuation },
-            ].filter((r) => r.foreground !== null) as editor.ITokenThemeRule[])
-          : [],
-        colors: {
-          'editor.background': '#00000000',
-          'editorGutter.background': '#00000000',
-        },
-      });
+    if (!monaco) {
+      return;
     }
+    monaco.editor.defineTheme('currentVSCodeTheme', {
+      base: themeKind,
+      inherit: true,
+      rules: colors
+        ? ([
+            { token: 'identifier', foreground: colors.key },
+            { token: 'variable', foreground: colors.key },
+            { token: 'variable.name', foreground: colors.key },
+            { token: 'string', foreground: colors.string },
+            { token: 'string.quote', foreground: colors.string },
+            { token: 'string.escape', foreground: colors.string },
+            { token: 'number', foreground: colors.number },
+            { token: 'keyword', foreground: colors.punctuation },
+            { token: 'type', foreground: colors.type },
+            { token: 'comment', foreground: colors.comment },
+            { token: 'delimiter', foreground: colors.punctuation },
+          ].filter((r) => r.foreground !== null) as editor.ITokenThemeRule[])
+        : [],
+      colors: {
+        'editor.background': '#00000000',
+        'editorGutter.background': '#00000000',
+      },
+    });
+    monaco.editor.setTheme('currentVSCodeTheme');
+
+    // Configure TypeScript to disable semantic diagnostics
+    // This prevents it from treating object keys as DOM/TypeScript identifiers
+    monaco.typescript.typescriptDefaults.setDiagnosticsOptions({
+      noSemanticValidation: true,
+      noSyntaxValidation: false,
+    });
+    monaco.typescript.typescriptDefaults.setCompilerOptions({
+      target: monaco.typescript.ScriptTarget.Latest,
+      allowNonTsExtensions: true,
+      noLib: true,
+    });
   }, [monaco, colors, themeKind]);
 
   const documentString = useMemo(() => {
@@ -258,8 +322,68 @@ const MonacoViewer: React.FC<MonacoViewerProps> = ({
     };
   }, []);
 
+  const handleEdit = useCallback(() => {
+    if (document._id) {
+      sendEditDocument(document._id);
+    }
+  }, [document]);
+
+  const handleCopy = useCallback(() => {
+    void navigator.clipboard.writeText(documentString);
+  }, [documentString]);
+
+  const handleClone = useCallback(() => {
+    sendCloneDocument(document);
+  }, [document]);
+
+  const handleDelete = useCallback(() => {
+    if (document._id) {
+      sendDeleteDocument(document._id);
+    }
+  }, [document]);
+
   return (
     <div className={cardStyles} data-testid="monaco-viewer-container">
+      <div className="action-bar">
+        {document._id && (
+          <button
+            className={actionButtonStyles}
+            onClick={handleEdit}
+            title="Edit"
+            aria-label="Edit"
+          >
+            <i className="codicon codicon-edit" />
+          </button>
+        )}
+        <button
+          className={actionButtonStyles}
+          onClick={handleCopy}
+          title="Copy"
+          aria-label="Copy"
+        >
+          <i className="codicon codicon-copy" />
+        </button>
+        {document._id && (
+          <button
+            className={actionButtonStyles}
+            onClick={handleClone}
+            title="Clone"
+            aria-label="Clone"
+          >
+            <i className="codicon codicon-files" />
+          </button>
+        )}
+        {document._id && (
+          <button
+            className={actionButtonStyles}
+            onClick={handleDelete}
+            title="Delete"
+            aria-label="Delete"
+          >
+            <i className="codicon codicon-trash" />
+          </button>
+        )}
+      </div>
       <div className={monacoWrapperStyles}>
         <Editor
           height={editorHeight}

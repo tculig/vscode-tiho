@@ -1,5 +1,5 @@
 import sinon, { type SinonSandbox, type SinonStub } from 'sinon';
-import type * as vscode from 'vscode';
+import * as vscode from 'vscode';
 import { expect } from 'chai';
 import { beforeEach, afterEach } from 'mocha';
 
@@ -7,6 +7,7 @@ import DataBrowsingController from '../../../views/dataBrowsingController';
 import { PreviewMessageType } from '../../../views/data-browsing-app/extension-app-message-constants';
 import type { DataBrowsingOptions } from '../../../views/dataBrowsingController';
 import { CollectionType } from '../../../explorer/documentUtils';
+import { EJSON } from 'bson';
 
 suite('DataBrowsingController Test Suite', function () {
   const sandbox: SinonSandbox = sinon.createSandbox();
@@ -39,7 +40,8 @@ suite('DataBrowsingController Test Suite', function () {
     overrides?: Partial<DataBrowsingOptions>,
   ): DataBrowsingOptions {
     return {
-      namespace: 'test.collection',
+      databaseName: 'test',
+      collectionName: 'collection',
       collectionType: CollectionType.collection,
       ...overrides,
     };
@@ -55,6 +57,8 @@ suite('DataBrowsingController Test Suite', function () {
     };
     testController = new DataBrowsingController({
       connectionController: mockConnectionController as any,
+      editorsController: {} as any,
+      playgroundController: {} as any,
       telemetryService: {} as any,
     });
     mockPanel = createMockPanel();
@@ -77,16 +81,6 @@ suite('DataBrowsingController Test Suite', function () {
       }
     }
     return undefined;
-  }
-
-  // Helper to count calls excluding theme colors messages
-  function countNonThemeColorCalls(stub: SinonStub): number {
-    return stub
-      .getCalls()
-      .filter(
-        (call) =>
-          call.args[0]?.command !== PreviewMessageType.updateThemeColors,
-      ).length;
   }
 
   suite('AbortController management', function () {
@@ -274,8 +268,8 @@ suite('DataBrowsingController Test Suite', function () {
 
       await testController.handleGetDocuments(mockPanel, options, 0, 10);
 
-      // No loadPage or error message should be posted (only theme colors is allowed)
-      expect(countNonThemeColorCalls(postMessageStub)).to.equal(0);
+      // No messages should be posted
+      expect(postMessageStub.callCount).to.equal(0);
     });
 
     test('does not throw when error occurs on aborted request', async function () {
@@ -293,8 +287,8 @@ suite('DataBrowsingController Test Suite', function () {
       // Should not throw
       await testController.handleGetDocuments(mockPanel, options, 0, 10);
 
-      // No loadPage or error message should be posted (only theme colors is allowed)
-      expect(countNonThemeColorCalls(postMessageStub)).to.equal(0);
+      // No messages should be posted
+      expect(postMessageStub.callCount).to.equal(0);
     });
   });
 
@@ -317,8 +311,7 @@ suite('DataBrowsingController Test Suite', function () {
       await testController.handleGetDocuments(mockPanel, options, 0, 10);
 
       expect(mockDataService.find.calledOnce).to.be.true;
-      // Theme colors + loadPage = 2 messages
-      expect(countNonThemeColorCalls(postMessageStub)).to.equal(1);
+      expect(postMessageStub.callCount).to.equal(1);
       const message = findMessageByCommand(
         postMessageStub,
         PreviewMessageType.loadPage,
@@ -332,8 +325,7 @@ suite('DataBrowsingController Test Suite', function () {
 
       await testController.handleGetDocuments(mockPanel, options, 10, 10);
 
-      // Theme colors + loadPage = 2 messages
-      expect(countNonThemeColorCalls(postMessageStub)).to.equal(1);
+      expect(postMessageStub.callCount).to.equal(1);
       const message = findMessageByCommand(
         postMessageStub,
         PreviewMessageType.loadPage,
@@ -359,8 +351,7 @@ suite('DataBrowsingController Test Suite', function () {
 
       await testController.handleGetDocuments(mockPanel, options, 0, 10);
 
-      // Theme colors + error = 2 messages
-      expect(countNonThemeColorCalls(postMessageStub)).to.equal(1);
+      expect(postMessageStub.callCount).to.equal(1);
       const message = findMessageByCommand(
         postMessageStub,
         PreviewMessageType.getDocumentError,
@@ -441,6 +432,32 @@ suite('DataBrowsingController Test Suite', function () {
         .true;
     });
 
+    test('calls handleGetDocuments with sort when getDocuments message includes sort', async function () {
+      const options = createMockOptions();
+      const handleGetDocumentsSpy = sandbox.spy(
+        testController,
+        'handleGetDocuments',
+      );
+
+      await testController.handleWebviewMessage(
+        {
+          command: PreviewMessageType.getDocuments,
+          skip: 0,
+          limit: 10,
+          sort: { _id: -1 },
+        },
+        mockPanel,
+        options,
+      );
+
+      expect(handleGetDocumentsSpy.calledOnce).to.be.true;
+      expect(
+        handleGetDocumentsSpy.calledWith(mockPanel, options, 0, 10, {
+          _id: -1,
+        }),
+      ).to.be.true;
+    });
+
     test('does nothing for unknown message commands', async function () {
       const options = createMockOptions();
 
@@ -469,8 +486,7 @@ suite('DataBrowsingController Test Suite', function () {
       const findOptions = mockDataService.find.firstCall.args[2];
       expect(findOptions.skip).to.equal(10);
       expect(findOptions.limit).to.equal(10);
-      // Theme colors + loadPage = 2 messages
-      expect(countNonThemeColorCalls(postMessageStub)).to.equal(1);
+      expect(postMessageStub.callCount).to.equal(1);
       const message = findMessageByCommand(
         postMessageStub,
         PreviewMessageType.loadPage,
@@ -493,6 +509,28 @@ suite('DataBrowsingController Test Suite', function () {
       expect(findOptions.skip).to.be.undefined;
     });
 
+    test('passes sort to find call when sort is provided', async function () {
+      const options = createMockOptions();
+
+      await testController.handleGetDocuments(mockPanel, options, 0, 10, {
+        _id: -1,
+      });
+
+      expect(mockDataService.find.calledOnce).to.be.true;
+      const findOptions = mockDataService.find.firstCall.args[2];
+      expect(findOptions.sort).to.deep.equal({ _id: -1 });
+    });
+
+    test('does not include sort in find options when sort is not provided', async function () {
+      const options = createMockOptions();
+
+      await testController.handleGetDocuments(mockPanel, options, 0, 10);
+
+      expect(mockDataService.find.calledOnce).to.be.true;
+      const findOptions = mockDataService.find.firstCall.args[2];
+      expect(findOptions.sort).to.be.undefined;
+    });
+
     test('posts getDocumentError message on fetch failure', async function () {
       mockDataService.find = sandbox
         .stub()
@@ -501,8 +539,7 @@ suite('DataBrowsingController Test Suite', function () {
 
       await testController.handleGetDocuments(mockPanel, options, 10, 10);
 
-      // Theme colors + error = 2 messages
-      expect(countNonThemeColorCalls(postMessageStub)).to.equal(1);
+      expect(postMessageStub.callCount).to.equal(1);
       const message = findMessageByCommand(
         postMessageStub,
         PreviewMessageType.getDocumentError,
@@ -522,8 +559,8 @@ suite('DataBrowsingController Test Suite', function () {
 
       await testController.handleGetDocuments(mockPanel, options, 10, 10);
 
-      // No loadPage or error message should be posted (only theme colors is allowed)
-      expect(countNonThemeColorCalls(postMessageStub)).to.equal(0);
+      // No messages should be posted
+      expect(postMessageStub.callCount).to.equal(0);
     });
   });
 
@@ -752,5 +789,115 @@ suite('DataBrowsingController Test Suite', function () {
       expect(handleGetTotalCountSpy.calledOnce).to.be.true;
       expect(handleGetTotalCountSpy.calledWith(mockPanel, options)).to.be.true;
     });
+  });
+
+  test('handleEditDocument calls editorsController.openMongoDBDocument', async function () {
+    const options = createMockOptions();
+
+    (testController as any)._connectionController = {
+      getActiveConnectionId: sandbox.stub().returns('conn-id'),
+    };
+
+    const openSpy = sandbox.stub().resolves(true);
+    // attach editors controller
+    (testController as any)._editorsController = {
+      openMongoDBDocument: openSpy,
+    };
+
+    await testController.handleEditDocument(options, 'my-id');
+
+    expect(openSpy.calledOnce).to.be.true;
+    const arg = openSpy.firstCall.args[0];
+    expect(arg.documentId).to.equal('my-id');
+    expect(arg.namespace).to.equal(
+      `${options.databaseName}.${options.collectionName}`,
+    );
+    expect(arg.source).to.equal('databrowser');
+  });
+
+  test('handleCloneDocument creates playground without _id', async function () {
+    const options = createMockOptions();
+
+    const createPlaygroundStub = sandbox.stub().resolves(true);
+    (testController as any)._playgroundController = {
+      createPlaygroundForCloneDocument: createPlaygroundStub,
+    };
+
+    const doc = { _id: '123', name: 'Test' };
+
+    // Note: handleCloneDocument expects a serialized single document (not array)
+    const singleSerialized = EJSON.serialize(doc, { relaxed: false });
+
+    await testController.handleCloneDocument(options, singleSerialized);
+
+    expect(createPlaygroundStub.calledOnce).to.be.true;
+    const calledWith = createPlaygroundStub.firstCall.args;
+    // first arg is document contents string, second is database name, third is collection name
+    expect(calledWith[1]).to.equal('test');
+    expect(calledWith[2]).to.equal('collection');
+  });
+
+  test('handleDeleteDocument deletes and notifies webview when confirmed', async function () {
+    const options = createMockOptions();
+
+    // stub confirm setting
+    const getStub = sandbox.stub();
+    getStub.withArgs('confirmDeleteDocument').returns(false);
+
+    sandbox
+      .stub(vscode.workspace, 'getConfiguration')
+      .returns({ get: getStub } as any);
+
+    // stub executeCommand
+    const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand');
+
+    // stub deleteOne on data service
+    (mockDataService as any).deleteOne = sandbox
+      .stub()
+      .resolves({ deletedCount: 1 });
+
+    // make sure we use the mock data service
+    (testController as any)._connectionController = {
+      getActiveDataService: () => {
+        return mockDataService;
+      },
+    };
+
+    await testController.handleDeleteDocument(mockPanel, options, 'del-id');
+
+    expect(getStub.calledWith('confirmDeleteDocument')).to.be.true;
+
+    expect((mockDataService as any).deleteOne.calledOnce).to.be.true;
+    const deleteArgs = (mockDataService as any).deleteOne.firstCall.args;
+    expect(deleteArgs[0]).to.equal(
+      `${options.databaseName}.${options.collectionName}`,
+    );
+    expect(deleteArgs[1]).to.deep.equal({ _id: 'del-id' });
+
+    // webview notified
+    const msg = postMessageStub
+      .getCalls()
+      .find((c) => c.args[0].command === PreviewMessageType.documentDeleted);
+    expect(msg).to.not.be.undefined;
+
+    // refresh command called
+    expect(executeCommandStub.calledWith('mdbRefreshCollection')).to.be.true;
+  });
+
+  test('handleDeleteDocument cancels when user declines', async function () {
+    const options = createMockOptions();
+
+    sandbox
+      .stub(vscode.workspace, 'getConfiguration')
+      .returns({ get: () => true } as any);
+    sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+    (mockDataService as any).deleteOne = sandbox
+      .stub()
+      .resolves({ deletedCount: 1 });
+
+    await testController.handleDeleteDocument(mockPanel, options, 'del-id');
+
+    expect((mockDataService as any).deleteOne.called).to.be.false;
   });
 });
