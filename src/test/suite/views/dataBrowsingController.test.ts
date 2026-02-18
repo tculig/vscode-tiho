@@ -21,6 +21,10 @@ suite('DataBrowsingController Test Suite', function () {
   let mockConnectionController: {
     getActiveDataService: SinonStub;
   };
+  let mockExplorerController: {
+    refresh: SinonStub;
+    refreshCollection: SinonStub;
+  };
 
   function createMockPanel(): vscode.WebviewPanel {
     postMessageStub = sandbox.stub().resolves(true);
@@ -55,10 +59,15 @@ suite('DataBrowsingController Test Suite', function () {
     mockConnectionController = {
       getActiveDataService: sandbox.stub().returns(mockDataService),
     };
+    mockExplorerController = {
+      refresh: sandbox.stub().returns(true),
+      refreshCollection: sandbox.stub().returns(true),
+    };
     testController = new DataBrowsingController({
       connectionController: mockConnectionController as any,
       editorsController: {} as any,
       playgroundController: {} as any,
+      explorerController: mockExplorerController as any,
       telemetryService: {} as any,
     });
     mockPanel = createMockPanel();
@@ -848,9 +857,6 @@ suite('DataBrowsingController Test Suite', function () {
       .stub(vscode.workspace, 'getConfiguration')
       .returns({ get: getStub } as any);
 
-    // stub executeCommand
-    const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand');
-
     // stub deleteOne on data service
     (mockDataService as any).deleteOne = sandbox
       .stub()
@@ -880,8 +886,11 @@ suite('DataBrowsingController Test Suite', function () {
       .find((c) => c.args[0].command === PreviewMessageType.documentDeleted);
     expect(msg).to.not.be.undefined;
 
-    // refresh command called
-    expect(executeCommandStub.calledWith('mdbRefreshCollection')).to.be.true;
+    // explorer tree refreshed with correct namespace
+    expect(mockExplorerController.refreshCollection.calledOnce).to.be.true;
+    expect(
+      mockExplorerController.refreshCollection.calledWith('test', 'collection'),
+    ).to.be.true;
   });
 
   test('handleDeleteDocument cancels when user declines', async function () {
@@ -899,6 +908,140 @@ suite('DataBrowsingController Test Suite', function () {
     await testController.handleDeleteDocument(mockPanel, options, 'del-id');
 
     expect((mockDataService as any).deleteOne.called).to.be.false;
+  });
+
+  suite('handleDeleteAllDocuments', function () {
+    let showInfoStub: SinonStub;
+
+    function setupDeleteAllMocks(overrides?: {
+      deletedCount?: number;
+      confirmResult?: string | undefined;
+    }) {
+      const { deletedCount = 100 } = overrides ?? {};
+      const confirmResult =
+        overrides && 'confirmResult' in overrides
+          ? overrides.confirmResult
+          : 'Yes';
+
+      showInfoStub = sandbox.stub(vscode.window, 'showInformationMessage');
+      showInfoStub.onFirstCall().resolves(confirmResult as any);
+
+      (mockDataService as any).deleteMany = sandbox
+        .stub()
+        .resolves({ deletedCount });
+
+      (testController as any)._connectionController = {
+        getActiveDataService: () => mockDataService,
+      };
+    }
+
+    test('uses deleteMany and notifies webview', async function () {
+      const options = createMockOptions();
+      setupDeleteAllMocks({ deletedCount: 500 });
+
+      await testController.handleDeleteAllDocuments(mockPanel, options);
+
+      // deleteMany should be called
+      expect((mockDataService as any).deleteMany.calledOnce).to.be.true;
+      expect((mockDataService as any).deleteMany.firstCall.args[0]).to.equal(
+        'test.collection',
+      );
+
+      // Should show success message with count
+      const successCall = showInfoStub
+        .getCalls()
+        .find(
+          (c) => typeof c.args[0] === 'string' && c.args[0].includes('500'),
+        );
+      expect(successCall).to.not.be.undefined;
+
+      // Should notify webview
+      const msg = postMessageStub
+        .getCalls()
+        .find((c) => c.args[0].command === PreviewMessageType.documentDeleted);
+      expect(msg).to.not.be.undefined;
+
+      // Should refresh tree with correct namespace
+      expect(mockExplorerController.refreshCollection.called).to.be.true;
+      expect(
+        mockExplorerController.refreshCollection.calledWith(
+          'test',
+          'collection',
+        ),
+      ).to.be.true;
+    });
+
+    test('does nothing when user cancels initial confirmation', async function () {
+      const options = createMockOptions();
+      setupDeleteAllMocks({ confirmResult: undefined });
+
+      await testController.handleDeleteAllDocuments(mockPanel, options);
+
+      expect((mockDataService as any).deleteMany.called).to.be.false;
+      expect(postMessageStub.called).to.be.false;
+    });
+
+    test('shows error when no active data service', async function () {
+      const options = createMockOptions();
+      setupDeleteAllMocks();
+
+      (testController as any)._connectionController = {
+        getActiveDataService: () => null,
+      };
+
+      const showErrorStub = sandbox
+        .stub(vscode.window, 'showErrorMessage')
+        .resolves();
+
+      await testController.handleDeleteAllDocuments(mockPanel, options);
+
+      expect(showErrorStub.calledOnce).to.be.true;
+      expect(showErrorStub.firstCall.args[0]).to.include(
+        'No active database connection',
+      );
+    });
+
+    test('shows error message when deleteMany fails', async function () {
+      const options = createMockOptions();
+      setupDeleteAllMocks();
+
+      (mockDataService as any).deleteMany = sandbox
+        .stub()
+        .rejects(new Error('Delete failed'));
+
+      const showErrorStub = sandbox
+        .stub(vscode.window, 'showErrorMessage')
+        .resolves();
+
+      await testController.handleDeleteAllDocuments(mockPanel, options);
+
+      expect(showErrorStub.calledOnce).to.be.true;
+      expect(showErrorStub.firstCall.args[0]).to.include('Delete failed');
+    });
+  });
+
+  suite('handleWebviewMessage for deleteAllDocuments', function () {
+    test('calls handleDeleteAllDocuments when deleteAllDocuments message received', async function () {
+      const options = createMockOptions();
+      const handleDeleteAllSpy = sandbox.spy(
+        testController,
+        'handleDeleteAllDocuments',
+      );
+
+      // Stub showInformationMessage to cancel so we don't need full mock setup
+      sandbox
+        .stub(vscode.window, 'showInformationMessage')
+        .resolves(undefined as any);
+
+      await testController.handleWebviewMessage(
+        { command: PreviewMessageType.deleteAllDocuments },
+        mockPanel,
+        options,
+      );
+
+      expect(handleDeleteAllSpy.calledOnce).to.be.true;
+      expect(handleDeleteAllSpy.calledWith(mockPanel, options)).to.be.true;
+    });
   });
 
   test('handleInsertDocument calls playgroundController.createPlaygroundForInsertDocument', async function () {

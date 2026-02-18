@@ -21,6 +21,7 @@ import {
 } from '../utils/themeColorReader';
 import type EditorsController from '../editors/editorsController';
 import type PlaygroundController from '../editors/playgroundController';
+import type ExplorerController from '../explorer/explorerController';
 import { DocumentSource } from '../documentSource';
 import { getDocumentViewAndEditFormat } from '../editors/types';
 
@@ -101,6 +102,7 @@ export default class DataBrowsingController {
   _connectionController: ConnectionController;
   _editorsController: EditorsController;
   _playgroundController: PlaygroundController;
+  _explorerController: ExplorerController;
   _telemetryService: TelemetryService;
   _activeWebviewPanels: vscode.WebviewPanel[] = [];
   _configChangedSubscription: vscode.Disposable;
@@ -112,16 +114,19 @@ export default class DataBrowsingController {
     connectionController,
     editorsController,
     playgroundController,
+    explorerController,
     telemetryService,
   }: {
     connectionController: ConnectionController;
     editorsController: EditorsController;
     playgroundController: PlaygroundController;
+    explorerController: ExplorerController;
     telemetryService: TelemetryService;
   }) {
     this._connectionController = connectionController;
     this._editorsController = editorsController;
     this._playgroundController = playgroundController;
+    this._explorerController = explorerController;
     this._telemetryService = telemetryService;
     this._configChangedSubscription = vscode.workspace.onDidChangeConfiguration(
       this.onConfigurationChanged,
@@ -202,6 +207,9 @@ export default class DataBrowsingController {
           options,
           EJSON.deserialize(message.documentId, { relaxed: false }),
         );
+        return;
+      case PreviewMessageType.deleteAllDocuments:
+        await this.handleDeleteAllDocuments(panel, options);
         return;
       case PreviewMessageType.insertDocument:
         await this.handleInsertDocument(options);
@@ -363,6 +371,57 @@ export default class DataBrowsingController {
     }
   };
 
+  handleDeleteAllDocuments = async (
+    panel: vscode.WebviewPanel,
+    options: DataBrowsingOptions,
+  ): Promise<void> => {
+    try {
+      const confirmationResult = await vscode.window.showInformationMessage(
+        `Are you sure you wish to delete all documents in ${options.databaseName}.${options.collectionName} collection?`,
+        {
+          modal: true,
+          detail:
+            'All documents present in this collection will be deleted. This action cannot be undone.',
+        },
+        'Yes',
+      );
+
+      if (confirmationResult !== 'Yes') {
+        return;
+      }
+
+      const dataService = this._connectionController.getActiveDataService();
+      if (!dataService) {
+        throw new Error('No active database connection');
+      }
+
+      const namespace = `${options.databaseName}.${options.collectionName}`;
+
+      const deleteResult = await dataService.deleteMany(namespace, {}, {});
+
+      void vscode.window.showInformationMessage(
+        `${deleteResult.deletedCount} document(s) successfully deleted.`,
+      );
+
+      // Refresh the tree view in the sidebar (reset collection cache so
+      // the document count is re-fetched).
+      this._explorerController.refreshCollection(
+        options.databaseName,
+        options.collectionName,
+      );
+
+      // Notify the webview that documents were deleted so it refreshes
+      void panel.webview.postMessage({
+        command: PreviewMessageType.documentDeleted,
+      });
+    } catch (error) {
+      log.error('Error deleting all documents', error);
+      void vscode.window.showErrorMessage(
+        `Failed to delete all documents: ${formatError(error).message}`,
+      );
+    }
+  };
+
   handleDeleteDocument = async (
     panel: vscode.WebviewPanel,
     options: DataBrowsingOptions,
@@ -411,8 +470,12 @@ export default class DataBrowsingController {
         'Document successfully deleted.',
       );
 
-      // Notify the tree view in the sidebar to refresh
-      await vscode.commands.executeCommand('mdbRefreshCollection');
+      // Refresh the tree view in the sidebar (reset collection cache so
+      // the document count is re-fetched).
+      this._explorerController.refreshCollection(
+        options.databaseName,
+        options.collectionName,
+      );
 
       // Notify the webview that the document was deleted
       void panel.webview.postMessage({
