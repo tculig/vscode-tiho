@@ -1,8 +1,10 @@
+import _ from 'lodash';
 import * as vscode from 'vscode';
 import { EJSON, type Document } from 'bson';
 import path from 'path';
 import { toJSString } from 'mongodb-query-parser';
 import type ConnectionController from '../connectionController';
+import ExtensionCommand from '../commands';
 import { createLogger } from '../logging';
 import {
   PreviewMessageType,
@@ -20,7 +22,28 @@ import {
   getMonacoBaseTheme,
 } from '../utils/themeColorReader';
 import { getDocumentViewAndEditFormat } from '../editors/types';
-import ExtensionCommand from '../commands';
+import type {
+  CursorConstructionOptionsWithChains,
+  CursorChainOptions,
+} from '@mongosh/shell-api';
+import {
+  Cursor,
+  AggregationCursor,
+  ShellInstanceState,
+  Mongo,
+} from '@mongosh/shell-api';
+import type { AggregateOptions, DbOptions, FindOptions } from 'mongodb';
+import { EventEmitter } from 'events';
+import { NodeDriverServiceProvider } from '@mongosh/service-provider-node-driver';
+import {
+  DataBrowserOpenedTelemetryEvent,
+  DataBrowserDocumentsFetchedTelemetryEvent,
+  DataBrowserDocumentEditedTelemetryEvent,
+  DataBrowserDocumentClonedTelemetryEvent,
+  DataBrowserDocumentInsertedTelemetryEvent,
+  DataBrowserDocumentDeletedTelemetryEvent,
+  DataBrowserClosedTelemetryEvent,
+} from '../telemetry';
 
 const log = createLogger('data browsing controller');
 
@@ -46,16 +69,147 @@ function getDefaultDocumentSort(): DocumentSort | undefined {
   return SORT_VALUE_MAP[getDefaultSortOrder()];
 }
 
+type FindQuery = {
+  filter: Document;
+  findOptions: FindOptions & EventEmitter.Abortable;
+  dbOptions: DbOptions;
+};
+
+type AggregateQuery = {
+  pipeline: Document[];
+  aggregateOptions: AggregateOptions & EventEmitter.Abortable;
+  dbOptions: DbOptions;
+};
+
+export type ParsedQuery = {
+  limit: number | null;
+  skip: number | null;
+  chains: CursorChainOptions[];
+} & (
+  | {
+      find: FindQuery;
+    }
+  | {
+      aggregate: AggregateQuery;
+    }
+);
+
+export function parseConstructionOptionsForFind(
+  query: CursorConstructionOptionsWithChains & { options: { method: 'find' } },
+): ParsedQuery {
+  let limit: number | null = null;
+  let skip: number | null = null;
+
+  const [, , filter, findOptions, dbOptions] = query.options.args;
+
+  // work off a copy because we might delete things
+  const filteredFindOptions = findOptions ? _.cloneDeep(findOptions) : {};
+  if (filteredFindOptions) {
+    if (filteredFindOptions.limit) {
+      limit = filteredFindOptions.limit;
+      delete filteredFindOptions.limit;
+    }
+    if (filteredFindOptions.skip) {
+      skip = filteredFindOptions.skip;
+      delete filteredFindOptions.skip;
+    }
+  }
+
+  if (query.chains) {
+    for (const chain of query.chains) {
+      if (chain.method === 'limit') {
+        limit = chain.args[0];
+      } else if (chain.method === 'skip') {
+        skip = chain.args[0];
+      }
+    }
+  }
+
+  const filteredChains = (query.chains ?? []).filter(
+    (chain) => !['limit', 'skip'].includes(chain.method),
+  );
+
+  return {
+    limit,
+    skip,
+    find: {
+      filter: filter ?? {},
+      findOptions: filteredFindOptions,
+      dbOptions: dbOptions ?? {},
+    },
+    chains: filteredChains,
+  };
+}
+
+export function parseConstructionOptionsForAggregate(
+  query: CursorConstructionOptionsWithChains & {
+    options: { method: 'aggregate' };
+  },
+): ParsedQuery {
+  const [, , pipeline, aggregateOptions, dbOptions] = query.options.args;
+
+  return {
+    // Aggregation pipelines can have multiple limit or skip stages, so we don't
+    // try to parse them out. Our code can safely append more.
+    limit: null,
+    skip: null,
+    aggregate: {
+      pipeline,
+      aggregateOptions: aggregateOptions ?? {},
+      dbOptions: dbOptions ?? {},
+    },
+    chains: query.chains ?? [],
+  };
+}
+
+function getWebViewTitle(
+  databaseName: string,
+  collectionName: string,
+  hasQuery: boolean,
+): string {
+  const namespace = `${databaseName}.${collectionName}`;
+  return hasQuery ? `Playground Result: ${namespace}` : namespace;
+}
+
+export function parseConstructionOptions(
+  query?: CursorConstructionOptionsWithChains,
+): ParsedQuery {
+  if (query) {
+    if (isFindQuery(query)) {
+      return parseConstructionOptionsForFind(query);
+    }
+    if (isAggregateQuery(query)) {
+      return parseConstructionOptionsForAggregate(query);
+    }
+
+    throw new Error(
+      'Only find and aggregate queries are supported in data browsing for now',
+    );
+  }
+  return {
+    limit: null,
+    skip: null,
+    find: {
+      filter: {},
+      findOptions: {},
+      dbOptions: {},
+    },
+    chains: [],
+  };
+}
+
 export const getDataBrowsingContent = ({
   extensionPath,
   webview,
   databaseName,
   collectionName,
+  query,
 }: {
   extensionPath: string;
   webview: vscode.Webview;
   databaseName: string;
   collectionName: string;
+  query?: string;
 }): string => {
   const codiconsDistPath = getCodiconsDistPath(extensionPath);
   const codiconStylesheetUri = webview
@@ -71,13 +225,13 @@ export const getDataBrowsingContent = ({
 
   const additionalHeadContent = `
     <link id="vscode-codicon-stylesheet" rel="stylesheet" href="${codiconStylesheetUri}" nonce="\${nonce}">
-    <script nonce="\${nonce}">window.MDB_DATA_BROWSING_OPTIONS = ${JSON.stringify({ monacoEditorBaseUri, defaultSortOrder })};</script>`;
+    <script nonce="\${nonce}">window.MDB_DATA_BROWSING_OPTIONS = ${JSON.stringify({ monacoEditorBaseUri, defaultSortOrder, query })};</script>`;
 
   return getWebviewHtml({
     extensionPath,
     webview,
     webviewType: 'dataBrowser',
-    title: `${databaseName}.${collectionName}`,
+    title: getWebViewTitle(databaseName, collectionName, !!query),
     additionalHeadContent,
   });
 };
@@ -86,6 +240,7 @@ export interface DataBrowsingOptions {
   databaseName: string;
   collectionName: string;
   collectionType: string;
+  query?: CursorConstructionOptionsWithChains;
 }
 
 type RequestType = 'documents' | 'totalCount';
@@ -94,6 +249,44 @@ interface PanelAbortControllers {
   documents?: AbortController;
   totalCount?: AbortController;
 }
+
+type FetchDocumentsParams = {
+  databaseName: string;
+  collectionName: string;
+  signal: AbortSignal;
+  skip: number;
+  limit: number;
+  sort?: DocumentSort;
+  query?: CursorConstructionOptionsWithChains;
+};
+
+const isFindQuery = (
+  query: CursorConstructionOptionsWithChains,
+): query is CursorConstructionOptionsWithChains & {
+  options: { method: 'find' };
+} => {
+  return query.options.method === 'find';
+};
+
+const isAggregateQuery = (
+  query: CursorConstructionOptionsWithChains,
+): query is CursorConstructionOptionsWithChains & {
+  options: { method: 'aggregate' };
+} => {
+  return query.options.method === 'aggregate';
+};
+
+const isFindParsedQuery = (
+  query: ParsedQuery,
+): query is ParsedQuery & { find: FindQuery } => {
+  return 'find' in query;
+};
+
+const isAggregateParsedQuery = (
+  query: ParsedQuery,
+): query is ParsedQuery & { aggregate: AggregateQuery } => {
+  return 'aggregate' in query;
+};
 
 export default class DataBrowsingController {
   _connectionController: ConnectionController;
@@ -194,7 +387,7 @@ export default class DataBrowsingController {
         );
         return;
       case PreviewMessageType.deleteAllDocuments:
-        await this.handleDeleteAllDocuments(panel, options);
+        await this.handleDeleteAllDocuments(options);
         return;
       case PreviewMessageType.insertDocument:
         await this.handleInsertDocument(options);
@@ -233,19 +426,24 @@ export default class DataBrowsingController {
     const effectiveSort = sort ?? getDefaultDocumentSort();
 
     try {
-      const documents = await this._fetchDocuments(
-        options.databaseName,
-        options.collectionName,
+      const documents = await this._fetchDocuments({
+        databaseName: options.databaseName,
+        collectionName: options.collectionName,
+        query: options.query,
         signal,
         skip,
         limit,
-        effectiveSort,
-      );
+        sort: effectiveSort,
+      });
 
       if (signal.aborted) {
         return;
       }
 
+      const source = options.query ? 'query-results' : 'collection';
+      this._telemetryService.track(
+        new DataBrowserDocumentsFetchedTelemetryEvent(source),
+      );
       void panel.webview.postMessage({
         command: PreviewMessageType.loadPage,
         documents: EJSON.serialize(documents, { relaxed: false }),
@@ -270,12 +468,13 @@ export default class DataBrowsingController {
     const { signal } = abortController;
 
     try {
-      const totalCount = await this._getTotalCount(
-        options.databaseName,
-        options.collectionName,
-        options.collectionType,
+      const totalCount = await this._getTotalCount({
+        databaseName: options.databaseName,
+        collectionName: options.collectionName,
+        collectionType: options.collectionType,
+        query: options.query,
         signal,
-      );
+      });
 
       if (signal.aborted) {
         return;
@@ -302,7 +501,7 @@ export default class DataBrowsingController {
     documentId: any,
   ): Promise<void> => {
     try {
-      await vscode.commands.executeCommand(
+      const result = await vscode.commands.executeCommand<boolean>(
         ExtensionCommand.mdbOpenMongodbDocumentFromDataBrowser,
         {
           documentId,
@@ -311,6 +510,12 @@ export default class DataBrowsingController {
           connectionId: this._connectionController.getActiveConnectionId(),
         },
       );
+      if (result) {
+        const source = options.query ? 'query-results' : 'collection';
+        this._telemetryService.track(
+          new DataBrowserDocumentEditedTelemetryEvent(source),
+        );
+      }
     } catch (error) {
       log.error('Error opening document for editing', error);
       void vscode.window.showErrorMessage(
@@ -328,7 +533,7 @@ export default class DataBrowsingController {
       delete deserialized._id;
       const documentContents = toJSString(deserialized) ?? '';
 
-      await vscode.commands.executeCommand(
+      const result = await vscode.commands.executeCommand<boolean>(
         ExtensionCommand.mdbCloneDocumentFromDataBrowser,
         {
           documentContents,
@@ -336,6 +541,12 @@ export default class DataBrowsingController {
           collectionName: options.collectionName,
         },
       );
+      if (result) {
+        const source = options.query ? 'query-results' : 'collection';
+        this._telemetryService.track(
+          new DataBrowserDocumentClonedTelemetryEvent(source),
+        );
+      }
     } catch (error) {
       log.error('Error cloning document', error);
       void vscode.window.showErrorMessage(
@@ -348,13 +559,19 @@ export default class DataBrowsingController {
     options: DataBrowsingOptions,
   ): Promise<void> => {
     try {
-      await vscode.commands.executeCommand(
+      const result = await vscode.commands.executeCommand<boolean>(
         ExtensionCommand.mdbInsertDocumentFromDataBrowser,
         {
           databaseName: options.databaseName,
           collectionName: options.collectionName,
         },
       );
+      if (result) {
+        const source = options.query ? 'query-results' : 'collection';
+        this._telemetryService.track(
+          new DataBrowserDocumentInsertedTelemetryEvent('data-browser', source),
+        );
+      }
     } catch (error) {
       log.error('Error opening insert document playground', error);
       void vscode.window.showErrorMessage(
@@ -364,51 +581,27 @@ export default class DataBrowsingController {
   };
 
   handleDeleteAllDocuments = async (
-    panel: vscode.WebviewPanel,
     options: DataBrowsingOptions,
   ): Promise<void> => {
+    if (options.query) {
+      log.error('Delete all documents with a query is not supported');
+      void vscode.window.showErrorMessage(
+        `Delete all documents with a query is not supported.`,
+      );
+      return;
+    }
+
     try {
-      const confirmationResult = await vscode.window.showInformationMessage(
-        `Are you sure you wish to delete all documents in ${options.databaseName}.${options.collectionName} collection?`,
+      await vscode.commands.executeCommand<boolean>(
+        ExtensionCommand.mdbDeleteAllDocuments,
         {
-          modal: true,
-          detail:
-            'All documents present in this collection will be deleted. This action cannot be undone.',
-        },
-        'Yes',
-      );
-
-      if (confirmationResult !== 'Yes') {
-        return;
-      }
-
-      const dataService = this._connectionController.getActiveDataService();
-      if (!dataService) {
-        throw new Error('No active database connection');
-      }
-
-      const namespace = `${options.databaseName}.${options.collectionName}`;
-
-      const deleteResult = await dataService.deleteMany(namespace, {}, {});
-
-      void vscode.window.showInformationMessage(
-        `${deleteResult.deletedCount} document(s) successfully deleted.`,
-      );
-
-      // Refresh the tree view in the sidebar (reset collection cache so
-      // the document count is re-fetched).
-      await vscode.commands.executeCommand(
-        ExtensionCommand.mdbRefreshCollectionFromDataBrowser,
-        {
-          databaseName: options.databaseName,
-          collectionName: options.collectionName,
+          ...options,
+          view: 'data-browser' as const,
+          source: options.query
+            ? ('query-results' as const)
+            : ('collection' as const),
         },
       );
-
-      // Notify the webview that documents were deleted so it refreshes
-      void panel.webview.postMessage({
-        command: PreviewMessageType.documentDeleted,
-      });
     } catch (error) {
       log.error('Error deleting all documents', error);
       void vscode.window.showErrorMessage(
@@ -464,6 +657,14 @@ export default class DataBrowsingController {
       void vscode.window.showInformationMessage(
         'Document successfully deleted.',
       );
+      const source = options.query ? 'query-results' : 'collection';
+      this._telemetryService.track(
+        new DataBrowserDocumentDeletedTelemetryEvent(
+          false,
+          'data-browser',
+          source,
+        ),
+      );
 
       // Refresh the tree view in the sidebar (reset collection cache so
       // the document count is re-fetched).
@@ -487,44 +688,185 @@ export default class DataBrowsingController {
     }
   };
 
+  private async _fetchDocumentsForFind({
+    databaseName,
+    collectionName,
+    limit,
+    skip,
+    sort,
+    signal,
+    parsedQuery,
+  }: FetchDocumentsParams & {
+    parsedQuery: ParsedQuery & { find: FindQuery };
+  }): Promise<Document[]> {
+    const connectionOptions =
+      this._connectionController.getMongoClientConnectionOptions();
+    if (!connectionOptions) {
+      throw new Error('No connection options found');
+    }
+    // TODO(VSCODE-757, VSCODE-758): connect only once and reuse the connection
+    // for subsequent requests instead of reconnecting every time. Or switch to
+    // only using node service provider in the whole extension, then use the
+    // same connection everywhere.
+    const serviceProvider = await NodeDriverServiceProvider.connect(
+      connectionOptions.url,
+      connectionOptions.options,
+    );
+
+    try {
+      const findOptions: {
+        limit: number;
+        skip?: number;
+        sort?: DocumentSort;
+        promoteValues: false;
+      } = {
+        limit: DEFAULT_DOCUMENTS_LIMIT,
+        promoteValues: false,
+      };
+
+      if (parsedQuery.skip) {
+        // if the parsed query has a skip, we honor that so that the first page only starts after that skip value
+        findOptions.skip = parsedQuery.skip;
+      }
+      if (skip !== undefined && skip > 0) {
+        // we add the skip from the pagination onto the parsed query skip if it is exists
+        findOptions.skip = (findOptions.skip ?? 0) + skip;
+      }
+
+      if (parsedQuery.limit) {
+        // if the parsed query has a limit we want to honor that so that we don't go past it
+        const remaining = parsedQuery.limit - (findOptions.skip ?? 0);
+        if (remaining < 1) {
+          // TODO: log
+          return [];
+        }
+        findOptions.limit = limit ? Math.min(remaining, limit) : remaining;
+      } else if (limit) {
+        // otherwise we only have to take the limit from the pagination into account
+        findOptions.limit = limit;
+      }
+
+      // Sort is only for a collection's documents list. It should be null if this
+      // relates back to a find cursor so that we use the playground's sort
+      // instead of overriding it.
+      if (sort) {
+        findOptions.sort = sort;
+      }
+
+      const executionOptions = signal ? { abortSignal: signal } : undefined;
+
+      const instanceState = new ShellInstanceState(
+        serviceProvider,
+        new EventEmitter(),
+      );
+      const mongo = new Mongo(instanceState);
+
+      const spCursor = serviceProvider.find(
+        databaseName,
+        collectionName,
+        parsedQuery.find.filter,
+        {
+          ...parsedQuery.find.findOptions,
+          ...findOptions,
+        },
+        {
+          ...parsedQuery.find.dbOptions,
+          ...executionOptions,
+        },
+      );
+      let cursor = new Cursor(mongo, spCursor);
+      for (const chain of parsedQuery.chains) {
+        cursor = cursor[chain.method](...chain.args);
+      }
+      return await cursor.toArray();
+    } finally {
+      await serviceProvider.close();
+    }
+  }
+
+  private async _fetchDocumentsForAggregate({
+    databaseName,
+    collectionName,
+    limit,
+    skip,
+    signal,
+    parsedQuery,
+  }: FetchDocumentsParams & {
+    parsedQuery: ParsedQuery & { aggregate: AggregateQuery };
+  }): Promise<Document[]> {
+    const connectionOptions =
+      this._connectionController.getMongoClientConnectionOptions();
+    if (!connectionOptions) {
+      throw new Error('No connection options found');
+    }
+    // TODO(VSCODE-757, VSCODE-758): connect only once and reuse the connection
+    // for subsequent requests instead of reconnecting every time. Or switch to
+    // only using node service provider in the whole extension, then use the
+    // same connection everywhere.
+    const serviceProvider = await NodeDriverServiceProvider.connect(
+      connectionOptions.url,
+      connectionOptions.options,
+    );
+
+    try {
+      const executionOptions = signal ? { abortSignal: signal } : undefined;
+
+      const instanceState = new ShellInstanceState(
+        serviceProvider,
+        new EventEmitter(),
+      );
+      const mongo = new Mongo(instanceState);
+
+      const pipeline = [
+        ...parsedQuery.aggregate.pipeline,
+        { $skip: skip },
+        { $limit: limit },
+      ];
+
+      const spCursor = serviceProvider.aggregate(
+        databaseName,
+        collectionName,
+        pipeline,
+        parsedQuery.aggregate.aggregateOptions,
+        {
+          ...parsedQuery.aggregate.dbOptions,
+          ...executionOptions,
+        },
+      );
+
+      let cursor = new AggregationCursor(mongo, spCursor);
+      for (const chain of parsedQuery.chains) {
+        cursor = cursor[chain.method](...chain.args);
+      }
+
+      return await cursor.toArray();
+    } finally {
+      await serviceProvider.close();
+    }
+  }
+
   private async _fetchDocuments(
-    databaseName: string,
-    collectionName: string,
-    signal?: AbortSignal,
-    skip?: number,
-    limit?: number,
-    sort?: DocumentSort,
+    options: FetchDocumentsParams,
   ): Promise<Document[]> {
-    const dataService = this._connectionController.getActiveDataService();
-    if (!dataService) {
-      throw new Error('No active database connection');
+    const parsedQuery = parseConstructionOptions(options.query);
+
+    if (isFindParsedQuery(parsedQuery)) {
+      return this._fetchDocumentsForFind({
+        ...options,
+        parsedQuery,
+        sort: options.sort,
+      });
     }
 
-    const findOptions: {
-      limit: number;
-      skip?: number;
-      sort?: DocumentSort;
-      promoteValues: false;
-    } = {
-      limit: limit ?? DEFAULT_DOCUMENTS_LIMIT,
-      promoteValues: false,
-    };
-
-    if (skip !== undefined && skip > 0) {
-      findOptions.skip = skip;
+    if (isAggregateParsedQuery(parsedQuery)) {
+      return this._fetchDocumentsForAggregate({
+        ...options,
+        parsedQuery,
+      });
     }
 
-    if (sort) {
-      findOptions.sort = sort;
-    }
-
-    const executionOptions = signal ? { abortSignal: signal } : undefined;
-
-    return dataService.find(
-      `${databaseName}.${collectionName}`,
-      {},
-      findOptions,
-      executionOptions,
+    throw new Error(
+      'Only find and aggregate queries are supported in data browsing for now',
     );
   }
 
@@ -541,13 +883,30 @@ export default class DataBrowsingController {
     }
   };
 
-  onWebviewPanelClosed = (disposedPanel: vscode.WebviewPanel): void => {
+  onWebviewPanelClosed = (
+    disposedPanel: vscode.WebviewPanel,
+    options: DataBrowsingOptions,
+  ): void => {
     this._cleanupAbortController(disposedPanel);
+
+    const source = options.query ? 'query-results' : 'collection';
+    this._telemetryService.track(new DataBrowserClosedTelemetryEvent(source));
 
     this._activeWebviewPanels = this._activeWebviewPanels.filter(
       (panel) => panel !== disposedPanel,
     );
   };
+
+  notifyDocumentsChanged(databaseName: string, collectionName: string): void {
+    const namespace = `${databaseName}.${collectionName}`;
+    for (const panel of this._activeWebviewPanels) {
+      if (panel.title === namespace) {
+        void panel.webview.postMessage({
+          command: PreviewMessageType.documentDeleted,
+        });
+      }
+    }
+  }
 
   onConfigurationChanged = (event: vscode.ConfigurationChangeEvent): void => {
     if (event.affectsConfiguration('workbench.colorTheme')) {
@@ -557,13 +916,23 @@ export default class DataBrowsingController {
     }
   };
 
-  private async _getTotalCount(
-    databaseName: string,
-    collectionName: string,
-    collectionType: string,
-    signal: AbortSignal,
-  ): Promise<number | null> {
+  private async _getTotalCount({
+    databaseName,
+    collectionName,
+    query,
+    collectionType,
+    signal,
+  }: {
+    databaseName: string;
+    collectionName: string;
+    query?: CursorConstructionOptionsWithChains;
+    collectionType: string;
+    signal: AbortSignal;
+  }): Promise<number | null> {
+    // for now don't support total count for cursor queries, probably never
+    // support it for views and time-series collections
     if (
+      query ||
       collectionType === CollectionType.view ||
       collectionType === CollectionType.timeseries
     ) {
@@ -596,16 +965,25 @@ export default class DataBrowsingController {
       'Opening data browser...',
       `${options.databaseName}.${options.collectionName}`,
     );
+    const source = options.query ? 'query-results' : 'collection';
+    this._telemetryService.track(
+      new DataBrowserOpenedTelemetryEvent(options.collectionType, source),
+    );
     const extensionPath = context.extensionPath;
 
     const panel = createWebviewPanel({
       viewType: 'mongodbDataBrowser',
-      title: `${options.databaseName}.${options.collectionName}`,
+      title: getWebViewTitle(
+        options.databaseName,
+        options.collectionName,
+        !!options.query,
+      ),
+      column: options.query ? vscode.ViewColumn.Beside : undefined,
       extensionPath,
       iconName: 'leaf.svg',
     });
 
-    panel.onDidDispose(() => this.onWebviewPanelClosed(panel));
+    panel.onDidDispose(() => this.onWebviewPanelClosed(panel, options));
     this._activeWebviewPanels.push(panel);
 
     panel.webview.html = getDataBrowsingContent({
@@ -613,6 +991,7 @@ export default class DataBrowsingController {
       webview: panel.webview,
       databaseName: options.databaseName,
       collectionName: options.collectionName,
+      query: JSON.stringify(options.query),
     });
 
     panel.webview.onDidReceiveMessage(
