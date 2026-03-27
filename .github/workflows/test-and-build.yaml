@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Setup Node environment
         uses: ./.github/workflows/actions/setup-node-environment
@@ -58,6 +59,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Setup Node environment
         uses: ./.github/workflows/actions/setup-node-environment
@@ -102,6 +104,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Setup Node environment
         uses: ./.github/workflows/actions/setup-node-environment
@@ -113,6 +116,16 @@ jobs:
         run: |
           pnpm run test
         shell: bash
+
+      - name: Upload e2e test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts-${{ matrix.os }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
 
   test-install:
     name: Run Install Test
@@ -130,6 +143,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Setup Node environment
         uses: ./.github/workflows/actions/setup-node-environment
